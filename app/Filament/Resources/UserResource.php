@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\GrowthService;
 use App\Services\SupportService;
 use Filament\Forms;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -48,6 +49,7 @@ class UserResource extends Resource
 
                         return $level->label().' · '.$level->title();
                     }),
+                Tables\Columns\IconColumn::make('is_admin')->label('超级管理员')->boolean(),
                 Tables\Columns\IconColumn::make('is_blocked')->label('拉黑')->boolean(),
             ])
             ->actions([
@@ -142,6 +144,20 @@ class UserResource extends Resource
                         })->implode('');
 
                         return new HtmlString('<ul>'.$rows.'</ul>');
+                    }),
+                Tables\Actions\Action::make('revokeAdmin')
+                    ->label('取消超级管理员')
+                    ->visible(fn (User $record) => $record->is_admin)
+                    ->requiresConfirmation()
+                    ->action(function (User $record) {
+                        if (User::query()->where('is_admin', true)->count() <= 1) {
+                            Notification::make()->title('至少保留一名超级管理员')->danger()->send();
+
+                            return;
+                        }
+
+                        $record->is_admin = false;
+                        $record->save();
                     }),
                 Tables\Actions\Action::make('block')
                     ->label('拉黑')

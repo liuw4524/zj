@@ -57,6 +57,7 @@ class User extends Authenticatable implements FilamentUser
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_blocked' => 'boolean',
+            'is_admin' => 'boolean',
             'growth_points' => 'integer',
             'medal_level' => 'integer',
             'support_paws' => 'integer',
@@ -92,6 +93,18 @@ class User extends Authenticatable implements FilamentUser
 
     public function canAccessPanel(Panel $panel): bool
     {
-        return $this->email === DebugUsers::OPS;
+        return $this->is_admin && ! $this->is_blocked;
+    }
+
+    public static function saveAdmin(string $name, string $email, string $password): self
+    {
+        $user = static::query()->firstOrNew(['email' => $email]);
+        $user->name = $name;
+        $user->password = $password;
+        $user->is_admin = true;
+        $user->is_blocked = false;
+        $user->save();
+
+        return $user;
     }
 }

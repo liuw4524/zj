@@ -21,10 +21,12 @@ class DatabaseSeeder extends Seeder
             ['email' => DebugUsers::CLUE],
             ['name' => '调试线索人', 'phone' => '13800000002', 'password' => $password, 'is_blocked' => false],
         );
-        User::query()->updateOrCreate(
+        $ops = User::query()->updateOrCreate(
             ['email' => DebugUsers::OPS],
             ['name' => '调试运营', 'phone' => '13800000003', 'password' => $password, 'is_blocked' => false],
         );
+        $ops->is_admin = true;
+        $ops->save();
 
         if (! app()->runningUnitTests()) {
             $this->call(DebugCluePostSeeder::class);
