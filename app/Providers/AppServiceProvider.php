@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Contracts\PaymentGateway;
 use App\Services\MockPaymentGateway;
+use App\Services\WechatPayClient;
 use App\Services\WechatPaymentGateway;
 use Illuminate\Support\ServiceProvider;
 
@@ -30,9 +31,7 @@ class AppServiceProvider extends ServiceProvider
         return filled($config['mch_id'] ?? null)
             && filled($config['api_v3_key'] ?? null)
             && filled($config['mini_app_id'] ?? null)
-            && is_file((string) ($config['private_key'] ?? ''))
-            && is_file((string) ($config['cert'] ?? ''))
-            && is_file((string) ($config['public_key'] ?? ''));
+            && WechatPayClient::certificatesAvailable();
     }
 
     /**

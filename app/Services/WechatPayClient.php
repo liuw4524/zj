@@ -11,6 +11,21 @@ use Illuminate\Support\Str;
 
 class WechatPayClient
 {
+    public static function certificatesAvailable(): bool
+    {
+        foreach (['private_key', 'cert', 'public_key'] as $key) {
+            $path = trim((string) config('services.wechat.'.$key));
+            if ($path === '' || ! self::fileExists($path)) {
+                return false;
+            }
+            if (! self::fileReadable($path)) {
+                throw new BusinessException('微信支付证书无法读取');
+            }
+        }
+
+        return true;
+    }
+
     public function jsapi(string $outTradeNo, int $amount, string $description, User $user): array
     {
         $openid = trim((string) $user->wechat_openid);
@@ -129,12 +144,19 @@ class WechatPayClient
             $timestamp,
             $this->merchantSerial(),
         );
-        $response = Http::withHeaders([
-            'Authorization' => $authorization,
-            'Accept' => 'application/json',
-            'Content-Type' => 'application/json',
-            'User-Agent' => 'zj-pay',
-        ])->timeout(10)->withBody($json, 'application/json')->send($method, 'https://api.mch.weixin.qq.com'.$path);
+        try {
+            $response = Http::withHeaders([
+                'Authorization' => $authorization,
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+                'User-Agent' => 'zj-pay',
+            ])->timeout(10)->withBody($json, 'application/json')->send($method, 'https://api.mch.weixin.qq.com'.$path);
+        } catch (BusinessException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            report($e);
+            throw new BusinessException('微信支付请求失败');
+        }
 
         $payload = $response->json();
         if (! is_array($payload) || ! $response->successful()) {
@@ -200,7 +222,14 @@ class WechatPayClient
 
     private function privateKey()
     {
-        $key = openssl_pkey_get_private((string) file_get_contents($this->path('private_key')));
+        try {
+            $key = openssl_pkey_get_private($this->contents('private_key'));
+        } catch (BusinessException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            report($e);
+            throw new BusinessException('微信支付密钥无效');
+        }
         if ($key === false) {
             throw new BusinessException('微信支付密钥无效');
         }
@@ -210,7 +239,14 @@ class WechatPayClient
 
     private function publicKey()
     {
-        $key = openssl_pkey_get_public((string) file_get_contents($this->path('public_key')));
+        try {
+            $key = openssl_pkey_get_public($this->contents('public_key'));
+        } catch (BusinessException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            report($e);
+            throw new BusinessException('微信支付公钥无效');
+        }
         if ($key === false) {
             throw new BusinessException('微信支付公钥无效');
         }
@@ -220,7 +256,14 @@ class WechatPayClient
 
     private function merchantSerial(): string
     {
-        $cert = openssl_x509_read((string) file_get_contents($this->path('cert')));
+        try {
+            $cert = openssl_x509_read($this->contents('cert'));
+        } catch (BusinessException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            report($e);
+            throw new BusinessException('微信支付证书无效');
+        }
         $parsed = $cert ? openssl_x509_parse($cert) : false;
         $serial = strtoupper((string) ($parsed['serialNumberHex'] ?? ''));
         if ($serial === '') {
@@ -230,14 +273,54 @@ class WechatPayClient
         return $serial;
     }
 
+    private function contents(string $key): string
+    {
+        try {
+            $body = file_get_contents($this->path($key));
+        } catch (BusinessException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            report($e);
+            throw new BusinessException('微信支付证书无法读取');
+        }
+        if (! is_string($body) || $body === '') {
+            throw new BusinessException('微信支付证书无法读取');
+        }
+
+        return $body;
+    }
+
     private function path(string $key): string
     {
-        $path = (string) config('services.wechat.'.$key);
-        if ($path === '' || ! is_file($path)) {
+        $path = trim((string) config('services.wechat.'.$key));
+        if ($path === '' || ! self::fileExists($path)) {
             throw new BusinessException('微信支付未配置');
+        }
+        if (! self::fileReadable($path)) {
+            throw new BusinessException('微信支付证书无法读取');
         }
 
         return $path;
+    }
+
+    private static function fileExists(string $path): bool
+    {
+        try {
+            return is_file($path);
+        } catch (\Throwable $e) {
+            report($e);
+            throw new BusinessException('微信支付证书无法读取');
+        }
+    }
+
+    private static function fileReadable(string $path): bool
+    {
+        try {
+            return is_readable($path);
+        } catch (\Throwable $e) {
+            report($e);
+            throw new BusinessException('微信支付证书无法读取');
+        }
     }
 
     private function appId(): string
