@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Filament\Resources\SettingResource;
 use App\Filament\Resources\SettingResource\Pages\EditSetting;
 use App\Filament\Resources\SettingResource\Pages\ListSettings;
 use App\Models\Setting;
@@ -53,6 +54,14 @@ class RescueTeamTest extends TestCase
         $this->getJson('/api/rescue-team')
             ->assertOk()
             ->assertJsonPath('data.url', null);
+    }
+
+    public function test_settings_list_quotes_reserved_key_column(): void
+    {
+        $sql = SettingResource::getEloquentQuery()->toSql();
+
+        $this->assertMatchesRegularExpression('/WHEN .+(`key`|"key") IN \(\?, \?\)/', $sql);
+        $this->assertStringNotContainsString('WHEN key IN', $sql);
     }
 
     public function test_admin_shows_image_upload_entries(): void

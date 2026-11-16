@@ -31,12 +31,17 @@ class SettingResource extends Resource
 
     public static function getEloquentQuery(): \Illuminate\Database\Eloquent\Builder
     {
-        $images = array_keys(Setting::imageKeys());
+        $query = parent::getEloquentQuery()
+            ->where('key', '!=', 'cooling_days');
 
-        return parent::getEloquentQuery()
-            ->where('key', '!=', 'cooling_days')
-            ->orderByRaw('CASE WHEN key IN (?, ?) THEN 0 ELSE 1 END', $images)
-            ->orderBy('id');
+        $images = array_keys(Setting::imageKeys());
+        if ($images !== []) {
+            $placeholders = implode(', ', array_fill(0, count($images), '?'));
+            $key = $query->getQuery()->getGrammar()->wrap($query->getModel()->qualifyColumn('key'));
+            $query->orderByRaw("CASE WHEN {$key} IN ({$placeholders}) THEN 0 ELSE 1 END", $images);
+        }
+
+        return $query->orderBy('id');
     }
 
     public static function form(Form $form): Form
