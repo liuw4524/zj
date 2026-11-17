@@ -113,7 +113,7 @@ class PostService
     {
         $query = Post::query()
             ->with(['images', 'escrow'])
-            ->where('status', PostStatus::Showing)
+            ->where('status', PostStatus::Showing->value)
             ->where('lit_until', '>', now());
 
         foreach (['province', 'city', 'district', 'town'] as $field) {
@@ -376,6 +376,7 @@ class PostService
 
             $locked->status = PostStatus::Withdrawn;
             $locked->active_key = null;
+            $locked->lit_until = null;
             $locked->save();
             $this->closeOpenLeads($locked);
 
@@ -505,6 +506,7 @@ class PostService
 
             $locked->status = PostStatus::Withdrawn;
             $locked->active_key = null;
+            $locked->lit_until = null;
             $locked->save();
 
             return $locked;

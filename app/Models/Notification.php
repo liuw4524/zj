@@ -10,6 +10,7 @@ class Notification extends Model
     protected $fillable = [
         'user_id',
         'post_id',
+        'clue_post_id',
         'kind',
         'title',
         'body',

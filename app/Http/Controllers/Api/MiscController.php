@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\BusinessException;
 use App\Http\Controllers\Controller;
 use App\Models\Notification;
 use App\Models\RuleSection;
@@ -25,9 +26,23 @@ class MiscController extends Controller
             'title' => $item->title,
             'body' => $item->body,
             'post_id' => $item->post_id,
+            'clue_post_id' => $item->clue_post_id,
         ]);
 
         return ApiResponse::paginated($paginator);
+    }
+
+    public function readNotification(Request $request, Notification $notification)
+    {
+        if ($notification->user_id !== $request->user()->id) {
+            throw new BusinessException('无权操作', 403);
+        }
+        if ($notification->read_at === null) {
+            $notification->read_at = now();
+            $notification->save();
+        }
+
+        return ApiResponse::ok();
     }
 
     public function rules()

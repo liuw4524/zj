@@ -105,8 +105,38 @@ class CluePostTest extends TestCase
             ->assertOk()
             ->json('data.id');
         $this->asRole('clue')->postJson('/api/clue-posts/'.$id.'/contact-requests')->assertStatus(422);
+        $this->asRole('owner')->getJson('/api/my/clue-contact-requests/pending-count')
+            ->assertOk()
+            ->assertJsonPath('data.count', 1);
+        $this->asRole('owner')->getJson('/api/notifications')
+            ->assertOk()
+            ->assertJsonFragment([
+                'kind' => 'clue_contact_request',
+                'title' => '有人申请查看联系方式',
+                'clue_post_id' => $id,
+            ]);
 
         $this->asRole('owner')->postJson('/api/clue-contact-requests/'.$requestId.'/approve')->assertOk();
+        $this->asRole('owner')->getJson('/api/my/clue-contact-requests/pending-count')
+            ->assertOk()
+            ->assertJsonPath('data.count', 0);
+        $this->asRole('clue')->getJson('/api/notifications')
+            ->assertOk()
+            ->assertJsonFragment([
+                'kind' => 'clue_contact_approved',
+                'title' => '联系方式申请已通过',
+                'clue_post_id' => $id,
+            ]);
+        $this->asRole('clue')->getJson('/api/my/clue-contact-requests/pending-count')
+            ->assertOk()
+            ->assertJsonPath('data.results', 1)
+            ->assertJsonPath('data.count', 1);
+        $noticeId = $this->asRole('clue')->getJson('/api/notifications')
+            ->json('data.0.id');
+        $this->asRole('clue')->postJson('/api/notifications/'.$noticeId.'/read')->assertOk();
+        $this->asRole('clue')->getJson('/api/my/clue-contact-requests/pending-count')
+            ->assertOk()
+            ->assertJsonPath('data.results', 0);
 
         $this->asRole('clue')->getJson('/api/clue-posts/'.$id)
             ->assertJsonPath('data.contact.phone', '13800000001');
@@ -117,6 +147,30 @@ class CluePostTest extends TestCase
         $this->asRole('owner')->postJson('/api/clue-posts/'.$id.'/withdraw')->assertOk();
         Storage::disk('public')->assertMissing($path);
         $this->asRole('clue')->getJson('/api/clue-posts/'.$id)->assertStatus(404);
+    }
+
+    public function test_rejected_contact_request_notifies_the_applicant(): void
+    {
+        $id = $this->asRole('owner')->postJson('/api/clue-posts', $this->payload($this->upload('owner'), false))
+            ->assertOk()
+            ->json('data.id');
+        app(\App\Services\CluePostService::class)->approve(CluePost::query()->findOrFail($id));
+        $requestId = $this->asRole('clue')->postJson('/api/clue-posts/'.$id.'/contact-requests')
+            ->assertOk()
+            ->json('data.id');
+
+        $this->asRole('owner')->postJson('/api/clue-contact-requests/'.$requestId.'/reject')->assertOk();
+        $this->asRole('clue')->getJson('/api/notifications')
+            ->assertOk()
+            ->assertJsonFragment([
+                'kind' => 'clue_contact_rejected',
+                'title' => '联系方式申请未通过',
+                'clue_post_id' => $id,
+            ]);
+        $this->asRole('clue')->getJson('/api/my/clue-contact-requests')->assertOk();
+        $this->asRole('clue')->getJson('/api/my/clue-contact-requests/pending-count')
+            ->assertOk()
+            ->assertJsonPath('data.results', 0);
     }
 
     public function test_blocked_user_and_active_cap(): void

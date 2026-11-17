@@ -26,6 +26,7 @@ Route::get('/rules', [MiscController::class, 'rules']);
 Route::get('/rescue-team', [MiscController::class, 'rescueTeam']);
 Route::get('/contact-platform', [MiscController::class, 'contactPlatform']);
 Route::get('/notifications', [MiscController::class, 'notifications']);
+Route::post('/notifications/{notification}/read', [MiscController::class, 'readNotification']);
 Route::get('/geo/city', [GeoController::class, 'city'])->middleware('throttle:30,1');
 
 Route::post('/uploads', [PostController::class, 'upload'])->middleware('throttle:30,1');
@@ -33,6 +34,7 @@ Route::post('/uploads', [PostController::class, 'upload'])->middleware('throttle
 Route::get('/clue-posts', [CluePostController::class, 'index']);
 Route::post('/clue-posts', [CluePostController::class, 'store']);
 Route::get('/my/clue-posts', [CluePostController::class, 'mine']);
+Route::get('/my/clue-contact-requests/pending-count', [CluePostController::class, 'pendingContactCount']);
 Route::get('/my/clue-contact-requests', [CluePostController::class, 'myRequests']);
 Route::get('/clue-posts/{cluePost}', [CluePostController::class, 'show']);
 Route::post('/clue-posts/{cluePost}/light', [CluePostController::class, 'light']);

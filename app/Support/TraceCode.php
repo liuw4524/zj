@@ -10,7 +10,7 @@ class TraceCode
     {
         $code = 'ZJ';
         $max = strlen(self::ALPHABET) - 1;
-        for ($i = 0; $i < 6; $i++) {
+        for ($i = 0; $i < 4; $i++) {
             $code .= self::ALPHABET[random_int(0, $max)];
         }
 

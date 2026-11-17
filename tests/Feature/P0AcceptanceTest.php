@@ -215,7 +215,15 @@ class P0AcceptanceTest extends TestCase
             ->assertOk()
             ->json('data.id');
 
+        $city = ['province' => '浙江省', 'city' => '杭州市'];
+        $this->asRole('clue')->getJson('/api/posts?'.http_build_query($city))
+            ->assertOk()
+            ->assertJsonFragment(['id' => $freeId]);
+
         $this->asRole('owner')->postJson('/api/posts/'.$freeId.'/withdraw')->assertOk();
+        $this->asRole('clue')->getJson('/api/posts?'.http_build_query($city))
+            ->assertOk()
+            ->assertJsonMissing(['id' => $freeId]);
         $this->assertSame(LeadStatus::ClosedWithCase, \App\Models\Lead::query()->find($leadId)->status);
         $this->asRole('owner')->getJson('/api/posts/'.$freeId)
             ->assertOk()

@@ -276,6 +276,19 @@ class CluePostService
         $request->status = ClueContactRequestStatus::Pending;
         $request->save();
 
+        $summary = trim(preg_replace('/\s+/u', ' ', (string) $post->description) ?? '');
+        $summary = $summary === '' ? '你的公益线索' : '「'.mb_substr($summary, 0, 20).'」';
+        Notification::query()->firstOrCreate(
+            ['dedupe_key' => 'clue-contact:'.$request->id],
+            [
+                'user_id' => $post->user_id,
+                'clue_post_id' => $post->id,
+                'kind' => 'clue_contact_request',
+                'title' => '有人申请查看联系方式',
+                'body' => '有人申请查看'.$summary.'的联系方式',
+            ]
+        );
+
         return $request->load(['user', 'cluePost']);
     }
 
@@ -290,6 +303,7 @@ class CluePostService
 
         $request->status = ClueContactRequestStatus::Approved;
         $request->save();
+        $this->notifyApplicant($request, true);
 
         return $request->load(['user', 'cluePost']);
     }
@@ -305,6 +319,7 @@ class CluePostService
 
         $request->status = ClueContactRequestStatus::Rejected;
         $request->save();
+        $this->notifyApplicant($request, false);
 
         return $request->load(['user', 'cluePost']);
     }
@@ -325,8 +340,52 @@ class CluePostService
         return $request->load(['user', 'cluePost']);
     }
 
+    private function notifyApplicant(ClueContactRequest $request, bool $approved): void
+    {
+        $summary = trim(preg_replace('/\s+/u', ' ', (string) ($request->cluePost?->description ?? '')) ?? '');
+        $summary = $summary === '' ? '这条公益线索' : '「'.mb_substr($summary, 0, 20).'」';
+        $kind = $approved ? 'clue_contact_approved' : 'clue_contact_rejected';
+        Notification::query()->firstOrCreate(
+            ['dedupe_key' => $kind.':'.$request->id],
+            [
+                'user_id' => $request->user_id,
+                'clue_post_id' => $request->clue_post_id,
+                'kind' => $kind,
+                'title' => $approved ? '联系方式申请已通过' : '联系方式申请未通过',
+                'body' => $approved
+                    ? '可以查看'.$summary.'的联系方式'
+                    : '暂不能查看'.$summary.'的联系方式',
+            ]
+        );
+    }
+
+    public function contactBadge(User $user): array
+    {
+        $incoming = ClueContactRequest::query()
+            ->where('status', ClueContactRequestStatus::Pending)
+            ->whereHas('cluePost', fn ($query) => $query->where('user_id', $user->id))
+            ->count();
+        $results = Notification::query()
+            ->where('user_id', $user->id)
+            ->whereIn('kind', ['clue_contact_approved', 'clue_contact_rejected'])
+            ->whereNull('read_at')
+            ->count();
+
+        return [
+            'incoming' => $incoming,
+            'results' => $results,
+            'count' => $incoming + $results,
+        ];
+    }
+
     public function myRequests(User $viewer): LengthAwarePaginator
     {
+        Notification::query()
+            ->where('user_id', $viewer->id)
+            ->whereIn('kind', ['clue_contact_approved', 'clue_contact_rejected'])
+            ->whereNull('read_at')
+            ->update(['read_at' => now()]);
+
         return ClueContactRequest::query()
             ->with(['cluePost', 'user'])
             ->where('user_id', $viewer->id)

@@ -89,7 +89,7 @@ class TraceCodeTest extends TestCase
             ->assertJsonPath('data.id', $created['id'])
             ->assertJsonMissingPath('data.contact_phone');
 
-        $this->asRole('clue')->getJson('/api/posts/trace?code='.urlencode(substr($code, 0, 6)))
+        $this->asRole('clue')->getJson('/api/posts/trace?code='.urlencode(substr($code, 0, 5)))
             ->assertStatus(404)
             ->assertJsonPath('message', '未找到该爪迹编号');
         $this->asRole('clue')->getJson('/api/posts/trace?code=没有这个号')
@@ -147,7 +147,7 @@ class TraceCodeTest extends TestCase
 
     private function assertTraceCode(string $code): void
     {
-        $this->assertMatchesRegularExpression('/^ZJ[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{6}$/', $code);
+        $this->assertMatchesRegularExpression('/^ZJ[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/', $code);
     }
 
     private function asRole(string $role): static

@@ -91,6 +91,11 @@ class CluePostController extends Controller
         return ApiResponse::ok($this->presenter->requestItem($item));
     }
 
+    public function pendingContactCount(Request $request)
+    {
+        return ApiResponse::ok($this->clues->contactBadge($request->user()));
+    }
+
     public function myRequests(Request $request)
     {
         $paginator = $this->clues->myRequests($request->user());
