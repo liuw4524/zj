@@ -139,13 +139,19 @@ class WechatPayService
         DB::transaction(function () use ($refund) {
             $locked = Refund::query()->whereKey($refund->id)->lockForUpdate()->first();
             $order = $locked?->escrowOrder()->lockForUpdate()->first();
-            if (! $locked || ! $order || $order->status === EscrowStatus::Refunded) {
+            if (! $locked || ! $order) {
                 return;
             }
-            $locked->status = RefundStatus::Refunded;
-            $locked->save();
-            $order->status = EscrowStatus::Refunded;
-            $order->save();
+            if ($order->status !== EscrowStatus::Refunded) {
+                $locked->status = RefundStatus::Refunded;
+                $locked->save();
+                $order->status = EscrowStatus::Refunded;
+                $order->save();
+            }
+            $post = Post::query()->whereKey($order->post_id)->lockForUpdate()->first();
+            if ($post) {
+                $this->posts->delistAfterRefund($post);
+            }
         });
     }
 }

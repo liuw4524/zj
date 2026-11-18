@@ -2,8 +2,12 @@
 
 namespace Tests\Feature;
 
+use App\Contracts\PaymentGateway;
 use App\Enums\EscrowStatus;
 use App\Enums\PostStatus;
+use App\Exceptions\BusinessException;
+use App\Models\Refund;
+use App\Services\MockPaymentGateway;
 use App\Filament\Resources\EscrowOrderResource\Pages\ListEscrowOrders;
 use App\Filament\Resources\PostResource\Pages\ListPosts;
 use App\Models\EscrowOrder;
@@ -40,6 +44,57 @@ class RefundReviewTest extends TestCase
         Livewire::actingAs(DebugUsers::operator())
             ->test(ListPosts::class)
             ->assertSee('已退款');
+    }
+
+    public function test_withdraw_leaves_the_homepage_when_the_refund_fails(): void
+    {
+        $postId = $this->approve($this->pay($this->createPost('退款失败仍下架')));
+        $this->app->bind(PaymentGateway::class, fn () => new class implements PaymentGateway
+        {
+            public function usesWechat(): bool
+            {
+                return true;
+            }
+
+            public function charge(\App\Models\EscrowOrder $order): ?array
+            {
+                return null;
+            }
+
+            public function chargeTopup(\App\Models\EscrowOrder $order, int $addAmount): ?array
+            {
+                return null;
+            }
+
+            public function chargeSupport(\App\Models\SupportOrder $order): ?array
+            {
+                return null;
+            }
+
+            public function refund(Refund $refund): void
+            {
+                throw new BusinessException('微信退款失败');
+            }
+        });
+
+        $this->asRole('owner')->postJson('/api/posts/'.$postId.'/withdraw')
+            ->assertStatus(422)
+            ->assertJsonPath('message', '微信退款失败');
+
+        $post = Post::query()->findOrFail($postId);
+        $this->assertSame(PostStatus::Withdrawn, $post->status);
+        $this->assertNull($post->lit_until);
+        $this->asRole('clue')->getJson('/api/posts?'.http_build_query([
+            'province' => '广西壮族自治区',
+            'city' => '北海市',
+        ]))->assertOk()->assertJsonMissing(['id' => $postId]);
+
+        $this->app->bind(PaymentGateway::class, fn ($app) => $app->make(MockPaymentGateway::class));
+        $this->asRole('owner')->postJson('/api/posts/'.$postId.'/withdraw')
+            ->assertOk()
+            ->assertJsonPath('data.status', PostStatus::Withdrawn->value)
+            ->assertJsonPath('data.status_text', '已撤回');
+        $this->assertSame(EscrowStatus::Refunded, EscrowOrder::query()->where('post_id', $postId)->first()->status);
     }
 
     public function test_withdraw_after_a_match_waits_for_admin(): void

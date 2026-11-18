@@ -349,8 +349,13 @@ class PostService
         $user->assertNotBlocked();
         $this->assertOwner($user, $post);
 
-        return DB::transaction(function () use ($post) {
+        // 先落库下架。退款要打微信，失败时不能把帖子滚回「展示中」。
+        $post = DB::transaction(function () use ($post) {
             $locked = Post::query()->whereKey($post->id)->lockForUpdate()->firstOrFail();
+
+            if ($locked->status === PostStatus::Withdrawn) {
+                return $locked;
+            }
 
             if ($locked->leads()->where('status', LeadStatus::Matched)->exists()) {
                 throw new BusinessException('有进行中的找对，请先把该线索标为找错');
@@ -365,15 +370,6 @@ class PostService
                 throw new BusinessException('当前状态不能撤回');
             }
 
-            $order = EscrowOrder::query()->where('post_id', $locked->id)->lockForUpdate()->first();
-            if ($order && in_array($order->status, [EscrowStatus::Held, EscrowStatus::AppealFrozen], true)) {
-                if ($locked->leads()->whereNotNull('matched_at')->exists()) {
-                    $this->holdRefundForReview($locked, $order);
-                } else {
-                    $this->refundHeld($locked, $order, true);
-                }
-            }
-
             $locked->status = PostStatus::Withdrawn;
             $locked->active_key = null;
             $locked->lit_until = null;
@@ -382,6 +378,28 @@ class PostService
 
             return $locked;
         });
+
+        $this->settleWithdrawnEscrow($post);
+
+        return $post->refresh();
+    }
+
+    public function delistAfterRefund(Post $post): void
+    {
+        if (! in_array($post->status, [
+            PostStatus::PendingPayment,
+            PostStatus::PendingReview,
+            PostStatus::Showing,
+            PostStatus::Frozen,
+        ], true)) {
+            return;
+        }
+
+        $post->status = PostStatus::Withdrawn;
+        $post->active_key = null;
+        $post->lit_until = null;
+        $post->save();
+        $this->closeOpenLeads($post);
     }
 
     public function light(User $user, Post $post): Post
@@ -560,6 +578,29 @@ class PostService
         }
 
         return null;
+    }
+
+    private function settleWithdrawnEscrow(Post $post): void
+    {
+        DB::transaction(function () use ($post) {
+            $locked = Post::query()->whereKey($post->id)->lockForUpdate()->firstOrFail();
+            if ($locked->status !== PostStatus::Withdrawn) {
+                return;
+            }
+
+            $order = EscrowOrder::query()->where('post_id', $locked->id)->lockForUpdate()->first();
+            if (! $order || ! in_array($order->status, [EscrowStatus::Held, EscrowStatus::AppealFrozen], true)) {
+                return;
+            }
+
+            if ($locked->leads()->whereNotNull('matched_at')->exists()) {
+                $this->holdRefundForReview($locked, $order);
+
+                return;
+            }
+
+            $this->refundHeld($locked, $order, true);
+        });
     }
 
     private function holdRefundForReview(Post $post, EscrowOrder $order): void

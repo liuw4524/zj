@@ -74,12 +74,18 @@ class WechatPaymentGateway implements PaymentGateway
         }
 
         foreach ($payments as $payment) {
-            $this->client->refund(
-                $payment->out_trade_no,
-                $this->refundNo($refund, $payment),
-                (int) $payment->amount,
-                (int) $payment->amount,
-            );
+            try {
+                $this->client->refund(
+                    $payment->out_trade_no,
+                    $this->refundNo($refund, $payment),
+                    (int) $payment->amount,
+                    (int) $payment->amount,
+                );
+            } catch (BusinessException $e) {
+                if (! str_contains($e->getMessage(), '已全额退款')) {
+                    throw $e;
+                }
+            }
         }
 
         $refund->status = RefundStatus::Refunded;
