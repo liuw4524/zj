@@ -14,9 +14,16 @@ class ConfirmReceiptRequest extends FormRequest
 
     protected function prepareForValidation(): void
     {
-        $images = JsonArrayInput::decode($this->input('images'));
-        if ($images !== $this->input('images')) {
-            $this->merge(['images' => $images]);
+        $images = $this->input('images');
+        $decoded = JsonArrayInput::decode($images);
+        if (is_string($decoded)) {
+            $decoded = array_values(array_filter(
+                array_map('trim', explode(',', $decoded)),
+                fn (string $item) => $item !== '',
+            ));
+        }
+        if ($decoded !== $images) {
+            $this->merge(['images' => $decoded]);
         }
     }
 

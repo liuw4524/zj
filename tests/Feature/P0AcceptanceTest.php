@@ -363,6 +363,18 @@ class P0AcceptanceTest extends TestCase
         $this->assertNull(EscrowOrder::query()->where('post_id', $postId)->first());
     }
 
+    public function test_confirm_accepts_comma_separated_image_string(): void
+    {
+        $postId = $this->approve($this->createPost(0, '逗号照片'));
+        $leadId = $this->submitLead($postId, 'clue');
+        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/match')->assertOk();
+        $packed = $this->upload('owner');
+
+        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm?images='.rawurlencode($packed), [
+            'images' => $packed,
+        ])->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value);
+    }
+
     public function test_reject_leaves_pending_review_and_refunds_escrow(): void
     {
         $plainId = $this->createPost(0, '待驳回');
