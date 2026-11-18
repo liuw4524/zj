@@ -67,5 +67,6 @@ Route::get('/leads/{lead}', [LeadController::class, 'show']);
 Route::post('/leads/{lead}/match', [LeadController::class, 'match']);
 Route::post('/leads/{lead}/acknowledge', [LeadController::class, 'acknowledge']);
 Route::post('/leads/{lead}/reject', [LeadController::class, 'reject']);
-Route::post('/leads/{lead}/confirm', [LeadController::class, 'confirm']);
+// 微信会把带数据的 POST 改成 GET，图片在地址上，所以这里两种方式都接受。
+Route::match(['get', 'post'], '/leads/{lead}/confirm', [LeadController::class, 'confirm']);
 Route::post('/leads/{lead}/not-mine', [LeadController::class, 'notMine']);
