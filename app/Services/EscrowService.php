@@ -43,7 +43,15 @@ class EscrowService
         $refund->status = RefundStatus::Refunding;
         $refund->save();
 
-        $this->gateway->refund($refund);
+        try {
+            $this->gateway->refund($refund);
+        } catch (BusinessException $e) {
+            if (! WechatPaymentGateway::alreadyRefunded($e->getMessage())) {
+                throw $e;
+            }
+            $refund->status = RefundStatus::Refunded;
+            $refund->save();
+        }
         $refund->refresh();
         if ($refund->status !== RefundStatus::Refunded) {
             return $refund;

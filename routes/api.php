@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\Route;
 
 Route::post('/auth/wechat', [\App\Http\Controllers\Api\AuthController::class, 'wechat'])->middleware('throttle:10,1');
 Route::post('/pay/wechat/notify', [\App\Http\Controllers\Api\WechatPayController::class, 'notify']);
+Route::match(['get', 'post'], '/pay/wechat/confirm', [\App\Http\Controllers\Api\WechatPayController::class, 'confirm'])->middleware('throttle:30,1');
 
 Route::get('/banners', [BannerController::class, 'index']);
 Route::get('/me', [MeController::class, 'show']);

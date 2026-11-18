@@ -37,7 +37,7 @@ class RefundReviewTest extends TestCase
         $postId = $this->approve($this->pay($this->createPost('直接退')));
         $this->asRole('owner')->postJson('/api/posts/'.$postId.'/withdraw')
             ->assertOk()
-            ->assertJsonPath('data.refund_text', '已撤回');
+            ->assertJsonPath('data.refund_text', '已撤回，退款已成功。');
 
         $this->assertSame(EscrowStatus::Refunded, EscrowOrder::query()->where('post_id', $postId)->first()->status);
 
@@ -95,6 +95,74 @@ class RefundReviewTest extends TestCase
             ->assertJsonPath('data.status', PostStatus::Withdrawn->value)
             ->assertJsonPath('data.status_text', '已撤回');
         $this->assertSame(EscrowStatus::Refunded, EscrowOrder::query()->where('post_id', $postId)->first()->status);
+    }
+
+    public function test_withdraw_records_refund_when_wechat_says_the_order_was_already_refunded(): void
+    {
+        $postId = $this->approve($this->pay($this->createPost('已退过款')));
+        $this->app->bind(PaymentGateway::class, fn () => new class implements PaymentGateway
+        {
+            public function usesWechat(): bool
+            {
+                return true;
+            }
+
+            public function charge(\App\Models\EscrowOrder $order): ?array
+            {
+                return null;
+            }
+
+            public function chargeTopup(\App\Models\EscrowOrder $order, int $addAmount): ?array
+            {
+                return null;
+            }
+
+            public function chargeSupport(\App\Models\SupportOrder $order): ?array
+            {
+                return null;
+            }
+
+            public function refund(Refund $refund): void
+            {
+                throw new BusinessException('申请退款金额超过订单可退金额');
+            }
+        });
+
+        $this->asRole('owner')->postJson('/api/posts/'.$postId.'/withdraw')
+            ->assertOk()
+            ->assertJsonPath('data.status', PostStatus::Withdrawn->value)
+            ->assertJsonPath('data.status_text', '已撤回')
+            ->assertJsonPath('data.refund_text', '已撤回，退款已成功。');
+
+        $this->assertSame(EscrowStatus::Refunded, EscrowOrder::query()->where('post_id', $postId)->first()->status);
+        $this->assertSame(PostStatus::Withdrawn, Post::query()->findOrFail($postId)->status);
+    }
+
+    public function test_refund_notify_marks_a_withdrawn_post_refunded_without_a_local_refund(): void
+    {
+        $postId = $this->approve($this->pay($this->createPost('通知补记退款')));
+        $order = EscrowOrder::query()->where('post_id', $postId)->firstOrFail();
+        $payment = new \App\Models\WechatPayment;
+        $payment->out_trade_no = 'W'.str()->ulid();
+        $payment->amount = $order->amount;
+        $payment->kind = \App\Models\WechatPayment::ESCROW;
+        $payment->escrow_order_id = $order->id;
+        $payment->paid_at = now();
+        $payment->save();
+
+        app(\App\Services\WechatPayService::class)->handle([
+            'event_type' => 'REFUND.SUCCESS',
+            'resource' => [
+                'refund_status' => 'SUCCESS',
+                'out_trade_no' => $payment->out_trade_no,
+                'out_refund_no' => 'R'.str()->ulid(),
+                'amount' => ['refund' => $order->amount],
+            ],
+        ]);
+
+        $this->assertSame(EscrowStatus::Refunded, $order->refresh()->status);
+        $this->assertSame(PostStatus::Withdrawn, Post::query()->findOrFail($postId)->status);
+        $this->assertSame(1, $order->refunds()->count());
     }
 
     public function test_withdraw_after_a_match_waits_for_admin(): void

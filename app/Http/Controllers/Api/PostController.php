@@ -133,7 +133,9 @@ class PostController extends Controller
         $post->load('escrow');
         $order = $post->escrow;
         $text = '已撤回';
-        if ($order?->status === EscrowStatus::RefundReview) {
+        if ($order?->status === EscrowStatus::Refunded) {
+            $text = '已撤回，退款已成功。';
+        } elseif ($order?->status === EscrowStatus::RefundReview) {
             $text = '已撤回。退款需平台确认，通过后才会原路退回。';
         } elseif ($order && $order->status === EscrowStatus::Held && RefundWindow::expired($order)) {
             $text = '已撤回。已超过微信退款期限，请联系平台退回托管金。';

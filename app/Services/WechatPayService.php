@@ -15,6 +15,7 @@ use App\Models\SupportOrder;
 use App\Models\User;
 use App\Models\WechatPayment;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Str;
 
 class WechatPayService
 {
@@ -32,6 +33,30 @@ class WechatPayService
         if (str_starts_with($event, 'REFUND.')) {
             $this->refunded($resource);
         }
+    }
+
+    public function confirm(User $user, string $outTradeNo, WechatPayClient $client): void
+    {
+        $payment = WechatPayment::query()->where('out_trade_no', $outTradeNo)->first();
+        if (! $payment || ! $this->ownedBy($payment, $user)) {
+            throw new BusinessException('支付单不存在', 404);
+        }
+        if ($payment->paid_at) {
+            $this->finishEscrow($payment);
+
+            return;
+        }
+
+        $resource = $client->query($outTradeNo);
+        $state = (string) ($resource['trade_state'] ?? '');
+        if ($state !== 'SUCCESS' || (string) ($resource['out_trade_no'] ?? '') !== $outTradeNo) {
+            throw new BusinessException(in_array($state, ['USERPAYING', 'NOTPAY', 'ACCEPT'], true) ? '支付结果确认中' : '支付未完成');
+        }
+
+        $this->handle([
+            'event_type' => 'TRANSACTION.SUCCESS',
+            'resource' => $resource,
+        ]);
     }
 
     private function paid(array $resource): void
@@ -68,13 +93,31 @@ class WechatPayService
         });
 
         if ($payment = WechatPayment::query()->where('out_trade_no', $outTradeNo)->first()) {
-            if ($payment->kind === WechatPayment::ESCROW && $payment->escrow_order_id) {
-                $order = EscrowOrder::query()->find($payment->escrow_order_id);
-                if ($order) {
-                    $this->posts->finishEscrowPayment($order);
-                }
-            }
+            $this->finishEscrow($payment);
         }
+    }
+
+    private function finishEscrow(WechatPayment $payment): void
+    {
+        if ($payment->kind !== WechatPayment::ESCROW || ! $payment->escrow_order_id) {
+            return;
+        }
+        $order = EscrowOrder::query()->find($payment->escrow_order_id);
+        if ($order) {
+            $this->posts->finishEscrowPayment($order);
+        }
+    }
+
+    private function ownedBy(WechatPayment $payment, User $user): bool
+    {
+        if ($payment->escrow_order_id) {
+            return (int) $payment->escrowOrder()->value('user_id') === (int) $user->id;
+        }
+        if ($payment->support_order_id) {
+            return (int) $payment->supportOrder()->value('user_id') === (int) $user->id;
+        }
+
+        return false;
     }
 
     private function markEscrowPaid(WechatPayment $payment): void
@@ -132,19 +175,26 @@ class WechatPayService
             return;
         }
         $payment = WechatPayment::query()->where('out_trade_no', (string) ($resource['out_trade_no'] ?? ''))->first();
-        $refund = $payment?->escrowOrder?->refunds()->latest('id')->first();
-        if (! $refund) {
+        if (! $payment?->escrow_order_id) {
             return;
         }
-        DB::transaction(function () use ($refund) {
-            $locked = Refund::query()->whereKey($refund->id)->lockForUpdate()->first();
-            $order = $locked?->escrowOrder()->lockForUpdate()->first();
-            if (! $locked || ! $order) {
+        DB::transaction(function () use ($payment, $resource) {
+            $order = EscrowOrder::query()->whereKey($payment->escrow_order_id)->lockForUpdate()->first();
+            if (! $order) {
                 return;
             }
             if ($order->status !== EscrowStatus::Refunded) {
-                $locked->status = RefundStatus::Refunded;
-                $locked->save();
+                $refund = $order->refunds()->latest('id')->lockForUpdate()->first();
+                if (! $refund) {
+                    $outRefundNo = (string) ($resource['out_refund_no'] ?? '');
+                    $refund = new Refund([
+                        'amount' => (int) ($resource['amount']['refund'] ?? $order->amount),
+                        'out_refund_no' => $outRefundNo !== '' ? $outRefundNo : 'R'.Str::ulid(),
+                    ]);
+                    $refund->escrow_order_id = $order->id;
+                }
+                $refund->status = RefundStatus::Refunded;
+                $refund->save();
                 $order->status = EscrowStatus::Refunded;
                 $order->save();
             }

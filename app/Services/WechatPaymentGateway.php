@@ -11,6 +11,7 @@ use App\Models\SupportOrder;
 use App\Models\User;
 use App\Models\WechatPayment;
 use Illuminate\Support\Str;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class WechatPaymentGateway implements PaymentGateway
 {
@@ -82,7 +83,7 @@ class WechatPaymentGateway implements PaymentGateway
                     (int) $payment->amount,
                 );
             } catch (BusinessException $e) {
-                if (! str_contains($e->getMessage(), '已全额退款')) {
+                if (! self::alreadyRefunded($e->getMessage())) {
                     throw $e;
                 }
             }
@@ -119,12 +120,58 @@ class WechatPaymentGateway implements PaymentGateway
 
     private function prepay(WechatPayment $payment, User $user, string $description): array
     {
-        $params = $this->client->jsapi($payment->out_trade_no, (int) $payment->amount, $description, $user);
+        $params = $this->client->jsapi($payment->out_trade_no, (int) $payment->amount, $description, $this->payer($user));
         $package = (string) ($params['package'] ?? '');
         $payment->prepay_id = str_starts_with($package, 'prepay_id=') ? substr($package, 10) : null;
         $payment->save();
+        $params['out_trade_no'] = $payment->out_trade_no;
 
         return $params;
+    }
+
+    private function payer(User $user): User
+    {
+        if (trim((string) $user->wechat_openid) !== '') {
+            return $user;
+        }
+
+        return $this->payerFromCode() ?? $this->payerFromToken() ?? $user;
+    }
+
+    private function payerFromCode(): ?User
+    {
+        $code = trim((string) request()->header('X-Wechat-Code', ''));
+        if ($code === '' || strlen($code) > 128 || preg_match('/^[A-Za-z0-9_-]+$/', $code) !== 1) {
+            return null;
+        }
+
+        $account = app(WechatAuthService::class)->login($code)['user'] ?? null;
+        if (! $account instanceof User || trim((string) $account->wechat_openid) === '') {
+            return null;
+        }
+
+        return $account;
+    }
+
+    private function payerFromToken(): ?User
+    {
+        $plain = request()->bearerToken();
+        if (! is_string($plain) || $plain === '') {
+            return null;
+        }
+
+        $account = PersonalAccessToken::findToken($plain)?->tokenable;
+        if (! $account instanceof User || trim((string) $account->wechat_openid) === '') {
+            return null;
+        }
+
+        return $account;
+    }
+
+    public static function alreadyRefunded(string $message): bool
+    {
+        return str_contains($message, '已全额退款')
+            || str_contains($message, '超过订单可退金额');
     }
 
     private function refundNo(Refund $refund, WechatPayment $payment): string

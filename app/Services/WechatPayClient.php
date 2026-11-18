@@ -55,6 +55,13 @@ class WechatPayClient
         return $this->miniPayParams($prepayId);
     }
 
+    public function query(string $outTradeNo): array
+    {
+        $path = '/v3/pay/transactions/out-trade-no/'.rawurlencode($outTradeNo).'?mchid='.$this->mchId();
+
+        return $this->request('GET', $path, null);
+    }
+
     public function refund(string $outTradeNo, string $outRefundNo, int $refund, int $total): string
     {
         $payload = $this->request('POST', '/v3/refund/domestic/refunds', [
@@ -127,11 +134,14 @@ class WechatPayClient
         ];
     }
 
-    private function request(string $method, string $path, array $body): array
+    private function request(string $method, string $path, ?array $body): array
     {
-        $json = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-        if ($json === false) {
-            throw new BusinessException('微信支付下单失败');
+        $json = '';
+        if ($body !== null) {
+            $json = json_encode($body, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($json === false) {
+                throw new BusinessException('微信支付下单失败');
+            }
         }
         $timestamp = (string) time();
         $nonce = Str::random(32);
@@ -145,12 +155,16 @@ class WechatPayClient
             $this->merchantSerial(),
         );
         try {
-            $response = Http::withHeaders([
+            $pending = Http::withHeaders([
                 'Authorization' => $authorization,
                 'Accept' => 'application/json',
                 'Content-Type' => 'application/json',
                 'User-Agent' => 'zj-pay',
-            ])->timeout(10)->withBody($json, 'application/json')->send($method, 'https://api.mch.weixin.qq.com'.$path);
+            ])->timeout(10);
+            if ($json !== '') {
+                $pending = $pending->withBody($json, 'application/json');
+            }
+            $response = $pending->send($method, 'https://api.mch.weixin.qq.com'.$path);
         } catch (BusinessException $e) {
             throw $e;
         } catch (\Throwable $e) {
