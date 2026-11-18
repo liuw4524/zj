@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Support\JsonArrayInput;
 use App\Support\Phone;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -17,12 +18,16 @@ class StoreLeadRequest extends FormRequest
     {
         $phone = Phone::normalize($this->input('phone'));
         $contactPhone = Phone::normalize($this->input('contact_phone')) ?? $phone;
+        $images = JsonArrayInput::decode($this->input('images'));
 
         $merged = [
             'phone' => $phone,
             'contact_phone' => $contactPhone,
         ];
-        if ($this->input('kind') === 'seen' && ! is_array($this->input('images'))) {
+        if ($images !== $this->input('images')) {
+            $merged['images'] = $images;
+        }
+        if ($this->input('kind') === 'seen' && ! is_array($merged['images'] ?? $this->input('images'))) {
             $merged['images'] = [];
         }
 

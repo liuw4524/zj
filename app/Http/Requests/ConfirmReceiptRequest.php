@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Support\JsonArrayInput;
 use Illuminate\Foundation\Http\FormRequest;
 
 class ConfirmReceiptRequest extends FormRequest
@@ -9,6 +10,14 @@ class ConfirmReceiptRequest extends FormRequest
     public function authorize(): bool
     {
         return true;
+    }
+
+    protected function prepareForValidation(): void
+    {
+        $images = JsonArrayInput::decode($this->input('images'));
+        if ($images !== $this->input('images')) {
+            $this->merge(['images' => $images]);
+        }
     }
 
     public function rules(): array

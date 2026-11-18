@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Support\JsonArrayInput;
 use App\Support\Phone;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
@@ -33,6 +34,10 @@ class StorePostRequest extends FormRequest
         }
         if ((int) $this->input('reward_amount') <= 0) {
             $merged['escrow_to_platform'] = false;
+        }
+        $images = JsonArrayInput::decode($this->input('images'));
+        if ($images !== $this->input('images')) {
+            $merged['images'] = $images;
         }
         $this->merge($merged);
     }

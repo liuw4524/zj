@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests;
 
+use App\Support\JsonArrayInput;
 use App\Support\Phone;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -29,6 +30,10 @@ class StoreCluePostRequest extends FormRequest
                 $value = trim($value);
                 $merged[$key] = $value === '' ? null : $value;
             }
+        }
+        $images = JsonArrayInput::decode($this->input('images'));
+        if ($images !== $this->input('images')) {
+            $merged['images'] = $images;
         }
         $this->merge($merged);
     }
