@@ -65,6 +65,8 @@ Route::get('/posts/{post}/leads', [LeadController::class, 'index']);
 Route::post('/posts/{post}/leads', [LeadController::class, 'store']);
 Route::match(['get', 'post'], '/posts/{post}/appeals', [LeadController::class, 'appeal']);
 
+Route::post('/leads/{lead}/receipts', [LeadController::class, 'storeReceipt'])->middleware('throttle:30,1');
+Route::delete('/leads/{lead}/receipts/{receiptImage}', [LeadController::class, 'destroyReceipt']);
 Route::get('/leads/{lead}', [LeadController::class, 'show']);
 Route::match(['get', 'post'], '/leads/{lead}/match', [LeadController::class, 'match']);
 Route::match(['get', 'post'], '/leads/{lead}/acknowledge', [LeadController::class, 'acknowledge']);

@@ -45,9 +45,8 @@ class BlockedAccountTest extends TestCase
         User::query()->where('email', DebugUsers::OWNER)->update(['is_blocked' => false]);
         $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/match')->assertOk();
         User::query()->where('email', DebugUsers::OWNER)->update(['is_blocked' => true]);
-        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm', [
-            'images' => [$this->upload('owner')],
-        ])->assertStatus(403)->assertJsonPath('message', '账号已限制');
+        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm')
+            ->assertStatus(403)->assertJsonPath('message', '账号已限制');
     }
 
     private function asRole(string $role): static

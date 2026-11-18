@@ -13,10 +13,13 @@ use App\Models\EscrowOrder;
 use App\Models\Lead;
 use App\Models\Notification;
 use App\Models\Post;
+use App\Models\ReceiptImage;
 use App\Models\Setting;
 use App\Models\User;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 
 class LeadService
 {
@@ -227,36 +230,48 @@ class LeadService
         return $lead->refresh();
     }
 
-    public function confirm(User $user, Lead $lead, array $images): Post
+    public function addReceipt(User $user, Lead $lead, UploadedFile $file): ReceiptImage
     {
-        $user->assertNotBlocked();
+        $this->assertCanConfirm($user, $lead);
+        $count = $lead->receiptImages()->count();
+        if ($count >= 6) {
+            throw new BusinessException('最多上传 6 张接收照片');
+        }
+
+        $stored = $this->uploads->store($user, $file);
+
+        return $lead->receiptImages()->create([
+            'path' => $stored['path'],
+            'sort' => $count,
+        ]);
+    }
+
+    public function removeReceipt(User $user, Lead $lead, ReceiptImage $image): void
+    {
+        $this->assertCanConfirm($user, $lead);
+        if ($image->lead_id !== $lead->id) {
+            throw new BusinessException('图片无效');
+        }
+
+        $this->uploads->assertOwned($user, $image->path);
+        Storage::disk('public')->delete($image->path);
+        $image->delete();
+    }
+
+    public function confirm(User $user, Lead $lead): Post
+    {
+        $this->assertCanConfirm($user, $lead);
         $post = $lead->post;
-        $this->assertOwner($user, $post);
-
-        if ($lead->kind === LeadKind::Seen) {
-            throw new BusinessException('目击线索不能确认收到');
-        }
-
-        if ($lead->status !== LeadStatus::Matched || $post->status !== PostStatus::Handover) {
-            throw new BusinessException('当前不能确认收到');
-        }
-
-        if (count($images) < 1) {
+        $paths = $lead->receiptImages()->orderBy('sort')->pluck('path')->all();
+        if (count($paths) < 1) {
             throw new BusinessException('请上传接收照片');
         }
 
-        foreach ($images as $path) {
+        foreach ($paths as $path) {
             $this->uploads->assertOwned($user, $path);
         }
 
-        return DB::transaction(function () use ($lead, $post, $images) {
-            foreach (array_values($images) as $index => $path) {
-                $lead->receiptImages()->create([
-                    'path' => $path,
-                    'sort' => $index,
-                ]);
-            }
-
+        return DB::transaction(function () use ($lead, $post) {
             if ($post->reward_amount === 0 || ! $post->escrow_to_platform) {
                 return $this->posts->closeSettled($post->fresh());
             }
@@ -421,6 +436,21 @@ class LeadService
             EscrowStatus::Settled => '已结清',
             default => null,
         };
+    }
+
+    private function assertCanConfirm(User $user, Lead $lead): void
+    {
+        $user->assertNotBlocked();
+        $post = $lead->post;
+        $this->assertOwner($user, $post);
+
+        if ($lead->kind === LeadKind::Seen) {
+            throw new BusinessException('目击线索不能确认收到');
+        }
+
+        if ($lead->status !== LeadStatus::Matched || $post->status !== PostStatus::Handover) {
+            throw new BusinessException('当前不能确认收到');
+        }
     }
 
     private function assertOwner(User $user, Post $post): void

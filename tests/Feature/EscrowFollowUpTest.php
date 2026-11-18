@@ -42,9 +42,10 @@ class EscrowFollowUpTest extends TestCase
         $this->approve($postId);
         $leadId = $this->submitLead($postId);
         $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/match')->assertOk();
-        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm', [
-            'images' => [$this->upload('owner')],
+        $this->asRole('owner')->post('/api/leads/'.$leadId.'/receipts', [
+            'file' => UploadedFile::fake()->image('receipt.jpg'),
         ])->assertOk();
+        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm')->assertOk();
 
         $order->refresh();
         $this->assertNotNull($order->payout_ready_at);
@@ -79,9 +80,10 @@ class EscrowFollowUpTest extends TestCase
         Artisan::call('escrows:remind');
         $this->assertSame(1, $this->alertCount('escrow-handover:'.$leadId));
 
-        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm', [
-            'images' => [$this->upload('owner')],
+        $this->asRole('owner')->post('/api/leads/'.$leadId.'/receipts', [
+            'file' => UploadedFile::fake()->image('receipt.jpg'),
         ])->assertOk();
+        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm')->assertOk();
         $order = EscrowOrder::query()->where('post_id', $postId)->firstOrFail();
 
         $this->travel(1)->days();

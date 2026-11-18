@@ -3,15 +3,17 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\ConfirmReceiptRequest;
 use App\Http\Requests\StoreAppealRequest;
 use App\Http\Requests\StoreLeadRequest;
+use App\Http\Requests\StoreUploadRequest;
 use App\Models\Lead;
 use App\Models\Post;
+use App\Models\ReceiptImage;
 use App\Services\LeadService;
 use App\Services\PostPresenter;
 use App\Support\ApiResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
 
 class LeadController extends Controller
 {
@@ -92,9 +94,27 @@ class LeadController extends Controller
         return ApiResponse::ok($this->presenter->lead($lead, $request->user()));
     }
 
-    public function confirm(ConfirmReceiptRequest $request, Lead $lead)
+    public function storeReceipt(StoreUploadRequest $request, Lead $lead)
     {
-        $post = $this->leads->confirm($request->user(), $lead, $request->validated('images'));
+        $image = $this->leads->addReceipt($request->user(), $lead, $request->file('file'));
+
+        return ApiResponse::ok([
+            'id' => $image->id,
+            'path' => $image->path,
+            'url' => Storage::disk('public')->url($image->path),
+        ]);
+    }
+
+    public function destroyReceipt(Request $request, Lead $lead, ReceiptImage $receiptImage)
+    {
+        $this->leads->removeReceipt($request->user(), $lead, $receiptImage);
+
+        return ApiResponse::ok();
+    }
+
+    public function confirm(Request $request, Lead $lead)
+    {
+        $post = $this->leads->confirm($request->user(), $lead);
 
         return ApiResponse::ok([
             'id' => $post->id,

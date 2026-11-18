@@ -151,9 +151,8 @@ class P0AcceptanceTest extends TestCase
         $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/match')
             ->assertStatus(422)
             ->assertJsonPath('message', '目击线索不能找对');
-        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm', [
-            'images' => [$this->upload('owner')],
-        ])->assertStatus(422)->assertJsonPath('message', '目击线索不能确认收到');
+        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm')
+            ->assertStatus(422)->assertJsonPath('message', '目击线索不能确认收到');
 
         $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/acknowledge')
             ->assertOk()
@@ -287,10 +286,11 @@ class P0AcceptanceTest extends TestCase
         $pending = $this->submitLead($post->id, 'clue');
         $this->asRole('owner')->postJson('/api/leads/'.$freshFirst.'/match')->assertOk();
 
-        $receipt = $this->upload('owner');
-        $this->asRole('owner')->postJson('/api/leads/'.$freshFirst.'/confirm', [
-            'images' => [$receipt],
-        ])->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value)
+        $this->asRole('owner')->post('/api/leads/'.$freshFirst.'/receipts', [
+            'file' => UploadedFile::fake()->image('receipt.jpg'),
+        ])->assertOk();
+        $this->asRole('owner')->postJson('/api/leads/'.$freshFirst.'/confirm')
+            ->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value)
             ->assertJsonPath('data.status_text', '已结案');
 
         $this->asRole('owner')->getJson('/api/my/posts')
@@ -356,23 +356,13 @@ class P0AcceptanceTest extends TestCase
 
         $leadId = $this->submitLead($postId, 'clue');
         $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/match')->assertOk();
-        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm', [
-            'images' => [$this->upload('owner')],
-        ])->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value);
+        $this->asRole('owner')->post('/api/leads/'.$leadId.'/receipts', [
+            'file' => UploadedFile::fake()->image('receipt.jpg'),
+        ])->assertOk();
+        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm')
+            ->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value);
 
         $this->assertNull(EscrowOrder::query()->where('post_id', $postId)->first());
-    }
-
-    public function test_confirm_accepts_comma_separated_image_string(): void
-    {
-        $postId = $this->approve($this->createPost(0, '逗号照片'));
-        $leadId = $this->submitLead($postId, 'clue');
-        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/match')->assertOk();
-        $packed = $this->upload('owner');
-
-        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm?images='.rawurlencode($packed), [
-            'images' => $packed,
-        ])->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value);
     }
 
     public function test_reject_leaves_pending_review_and_refunds_escrow(): void
@@ -404,9 +394,11 @@ class P0AcceptanceTest extends TestCase
         $postId = $this->approve($this->pay($this->createPost(10000, '超时')));
         $leadId = $this->submitLead($postId, 'clue');
         $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/match')->assertOk();
-        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm', [
-            'images' => [$this->upload('owner')],
-        ])->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value)
+        $this->asRole('owner')->post('/api/leads/'.$leadId.'/receipts', [
+            'file' => UploadedFile::fake()->image('receipt.jpg'),
+        ])->assertOk();
+        $this->asRole('owner')->postJson('/api/leads/'.$leadId.'/confirm')
+            ->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value)
             ->assertJsonPath('data.status_text', '已结案');
 
         $this->asRole('owner')->getJson('/api/my/posts')
