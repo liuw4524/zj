@@ -234,8 +234,8 @@ class LeadService
     {
         $this->assertCanConfirm($user, $lead);
         $count = $lead->receiptImages()->count();
-        if ($count >= 6) {
-            throw new BusinessException('最多上传 6 张接收照片');
+        if ($count >= 4) {
+            throw new BusinessException('最多上传 4 张接收照片');
         }
 
         $stored = $this->uploads->store($user, $file);
@@ -256,6 +256,16 @@ class LeadService
         $this->uploads->assertOwned($user, $image->path);
         Storage::disk('public')->delete($image->path);
         $image->delete();
+    }
+
+    public function clearReceipts(User $user, Lead $lead): void
+    {
+        $this->assertCanConfirm($user, $lead);
+        $paths = $lead->receiptImages()->pluck('path')->all();
+        foreach ($paths as $path) {
+            Storage::disk('public')->delete($path);
+        }
+        $lead->receiptImages()->delete();
     }
 
     public function confirm(User $user, Lead $lead): Post

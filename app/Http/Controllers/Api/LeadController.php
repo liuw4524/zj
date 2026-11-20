@@ -112,6 +112,13 @@ class LeadController extends Controller
         return ApiResponse::ok();
     }
 
+    public function clearReceipts(Request $request, Lead $lead)
+    {
+        $this->leads->clearReceipts($request->user(), $lead);
+
+        return ApiResponse::ok();
+    }
+
     public function confirm(Request $request, Lead $lead)
     {
         $post = $this->leads->confirm($request->user(), $lead);
