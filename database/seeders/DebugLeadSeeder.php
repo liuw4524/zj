@@ -21,7 +21,8 @@ class DebugLeadSeeder extends Seeder
         }
 
         $sources = collect(Storage::disk('public')->files('uploads/'.$owner->id))
-            ->reject(fn (string $path) => str_contains($path, 'debug-lead-'))
+            ->reject(fn (string $path) => str_contains($path, 'debug-'))
+            ->filter(fn (string $path) => Storage::disk('public')->size($path) >= 20000)
             ->values();
 
         $samples = [
@@ -41,19 +42,25 @@ class DebugLeadSeeder extends Seeder
                 ->where('post_id', $post->id)
                 ->where('content', $content)
                 ->first();
-            if ($lead) {
+            $fresh = $lead === null;
+            if ($fresh) {
+                $lead = new Lead;
+                $lead->post_id = $post->id;
+                $lead->user_id = $owner->id;
+                $lead->content = $content;
+                $lead->kind = LeadKind::Held;
+                $lead->contact_name = $owner->name ?: '杰克';
+                $lead->contact_phone = $owner->phone ?: '13800000001';
+            }
+            $lead->status = LeadStatus::Submitted;
+            $lead->matched_at = null;
+            $lead->contact_visible_until = null;
+            $lead->owner_seen_at = null;
+            $lead->save();
+
+            if (! $fresh && $lead->images()->exists()) {
                 continue;
             }
-
-            $lead = new Lead;
-            $lead->post_id = $post->id;
-            $lead->user_id = $owner->id;
-            $lead->content = $content;
-            $lead->kind = LeadKind::Held;
-            $lead->contact_name = $owner->name ?: '杰克';
-            $lead->contact_phone = $owner->phone ?: '13800000001';
-            $lead->status = LeadStatus::Submitted;
-            $lead->save();
 
             if ($sources->isEmpty()) {
                 continue;

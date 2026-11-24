@@ -9,6 +9,7 @@ use App\Filament\Resources\PostResource\Pages\EditPost;
 use App\Filament\Resources\PostResource\Pages\ListPosts;
 use App\Filament\Resources\PostResource\Pages\ViewPost;
 use App\Models\EscrowOrder;
+use App\Models\Notification;
 use App\Models\Post;
 use App\Models\Setting;
 use App\Models\User;
@@ -551,6 +552,41 @@ class P0AcceptanceTest extends TestCase
         $this->submitLead($postId, 'clue');
         $this->asRole('owner')->getJson('/api/my/incoming-leads/unread-count')
             ->assertJsonPath('data.count', 1);
+    }
+
+    public function test_same_post_handover_notice_is_listed_once(): void
+    {
+        Setting::query()->where('key', 'max_active_posts')->update(['value' => '2']);
+        $postId = $this->approve($this->pay($this->createPost(10000, '奶糖')));
+        $first = $this->submitLead($postId, 'clue');
+        $second = $this->submitLead($postId, 'clue');
+        $this->asRole('owner')->postJson('/api/leads/'.$first.'/match')->assertOk();
+        $this->asRole('owner')->postJson('/api/leads/'.$first.'/reject')->assertOk();
+        $this->asRole('owner')->postJson('/api/leads/'.$second.'/match')->assertOk();
+
+        $otherId = $this->approve($this->pay($this->createPost(10000, '豆豆')));
+        $third = $this->submitLead($otherId, 'clue');
+        $this->asRole('owner')->postJson('/api/leads/'.$third.'/match')->assertOk();
+
+        $this->assertSame(2, Notification::query()->where('post_id', $postId)->where('kind', 'handover_confirm')->count());
+        $this->asRole('clue')->getJson('/api/notifications/unread-count')
+            ->assertOk()
+            ->assertJsonPath('data.count', 2)
+            ->assertJsonPath('data.prompt', 2);
+        $this->asRole('clue')->getJson('/api/notifications')
+            ->assertOk()
+            ->assertJsonPath('meta.total', 2)
+            ->assertJsonFragment(['kind' => 'handover_confirm', 'subject' => '奶糖', 'post_id' => $postId, 'unread' => true])
+            ->assertJsonFragment(['kind' => 'handover_confirm', 'subject' => '豆豆', 'post_id' => $otherId, 'unread' => true]);
+
+        $noticeId = collect($this->asRole('clue')->getJson('/api/notifications')->json('data'))
+            ->firstWhere('subject', '奶糖')['id'];
+        $this->asRole('clue')->postJson('/api/notifications/'.$noticeId.'/read')->assertOk();
+        $this->assertSame(0, Notification::query()->where('post_id', $postId)->where('kind', 'handover_confirm')->whereNull('read_at')->count());
+        $this->asRole('clue')->getJson('/api/notifications/unread-count')
+            ->assertOk()
+            ->assertJsonPath('data.count', 1)
+            ->assertJsonPath('data.prompt', 1);
     }
 
     private function asRole(string $role): static

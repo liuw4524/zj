@@ -29,6 +29,7 @@ class DatabaseSeeder extends Seeder
         $ops->save();
 
         if (! app()->runningUnitTests()) {
+            $this->call(DebugPostSeeder::class);
             $this->call(DebugCluePostSeeder::class);
             $this->call(DebugLeadSeeder::class);
         }

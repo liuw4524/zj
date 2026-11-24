@@ -20,7 +20,8 @@ class DebugCluePostSeeder extends Seeder
         }
 
         $sources = collect(Storage::disk('public')->files('uploads/'.$user->id))
-            ->reject(fn (string $path) => str_contains($path, 'debug-clue-'))
+            ->reject(fn (string $path) => str_contains($path, 'debug-'))
+            ->filter(fn (string $path) => Storage::disk('public')->size($path) >= 20000)
             ->values();
 
         $samples = [

@@ -14,3 +14,4 @@ Schedule::command('clue-posts:purge-stale')->daily();
 Schedule::command('posts:remind-expiring')->hourly();
 Schedule::command('escrows:finish-cooling')->hourly();
 Schedule::command('escrows:remind')->hourly();
+Schedule::command('pay:sync-pending')->everyMinute();

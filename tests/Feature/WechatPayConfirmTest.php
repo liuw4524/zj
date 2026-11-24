@@ -12,6 +12,7 @@ use App\Support\DebugUsers;
 use Database\Seeders\DatabaseSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -99,6 +100,79 @@ class WechatPayConfirmTest extends TestCase
         $this->assertSame('prepay_id=prepay', $params['package']);
         $this->assertNotSame('', $params['out_trade_no']);
         $this->assertSame('openid-pay', User::query()->where('wechat_openid', 'openid-pay')->value('wechat_openid'));
+    }
+
+    public function test_sync_marks_support_paid_without_returning_from_cashier(): void
+    {
+        $this->payment();
+        $this->mock(WechatPayClient::class, function ($mock) {
+            $mock->shouldReceive('query')->once()->andReturn([
+                'trade_state' => 'SUCCESS',
+                'out_trade_no' => 'WCONFIRM0001',
+                'transaction_id' => '4200000001',
+                'amount' => ['total' => 100],
+            ]);
+        });
+
+        $this->withHeader('X-Debug-User', 'owner')
+            ->postJson('/api/pay/wechat/sync')
+            ->assertOk()
+            ->assertJsonPath('data.pending', 0);
+
+        $this->assertNotNull(WechatPayment::query()->where('out_trade_no', 'WCONFIRM0001')->value('paid_at'));
+        $this->assertSame(1, DebugUsers::resolve('owner')->support_paws);
+    }
+
+    public function test_sync_leaves_unpaid_order_pending(): void
+    {
+        $this->payment();
+        $this->mock(WechatPayClient::class, function ($mock) {
+            $mock->shouldReceive('query')->once()->andReturn([
+                'trade_state' => 'NOTPAY',
+                'out_trade_no' => 'WCONFIRM0001',
+                'amount' => ['total' => 100],
+            ]);
+        });
+
+        $this->withHeader('X-Debug-User', 'owner')
+            ->postJson('/api/pay/wechat/sync')
+            ->assertOk()
+            ->assertJsonPath('data.pending', 1);
+
+        $this->assertNull(WechatPayment::query()->where('out_trade_no', 'WCONFIRM0001')->value('paid_at'));
+    }
+
+    public function test_sync_does_not_query_another_users_payment(): void
+    {
+        $this->payment();
+        $this->mock(WechatPayClient::class, function ($mock) {
+            $mock->shouldReceive('query')->never();
+        });
+
+        $this->withHeader('X-Debug-User', 'clue')
+            ->postJson('/api/pay/wechat/sync')
+            ->assertOk()
+            ->assertJsonPath('data.pending', 0);
+
+        $this->assertNull(WechatPayment::query()->where('out_trade_no', 'WCONFIRM0001')->value('paid_at'));
+    }
+
+    public function test_command_syncs_paid_orders_user_never_reopens(): void
+    {
+        $this->payment();
+        $this->mock(WechatPayClient::class, function ($mock) {
+            $mock->shouldReceive('query')->once()->andReturn([
+                'trade_state' => 'SUCCESS',
+                'out_trade_no' => 'WCONFIRM0001',
+                'transaction_id' => '4200000002',
+                'amount' => ['total' => 100],
+            ]);
+        });
+
+        Artisan::call('pay:sync-pending');
+
+        $this->assertSame('4200000002', WechatPayment::query()->where('out_trade_no', 'WCONFIRM0001')->value('transaction_id'));
+        $this->assertSame(SupportOrderStatus::Paid, SupportOrder::query()->firstOrFail()->status);
     }
 
     public function test_confirm_rejects_another_users_payment(): void

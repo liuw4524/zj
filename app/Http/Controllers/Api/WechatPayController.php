@@ -39,4 +39,14 @@ class WechatPayController extends Controller
 
         return ApiResponse::ok();
     }
+
+    public function sync(Request $request, WechatPayClient $client, WechatPayService $service)
+    {
+        $user = $request->user();
+        if (! $user instanceof User) {
+            throw new BusinessException('请用微信登录后再支付', 401);
+        }
+
+        return ApiResponse::ok($service->syncPending($user, $client));
+    }
 }

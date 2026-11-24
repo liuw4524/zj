@@ -47,16 +47,34 @@ class WechatPayService
             return;
         }
 
-        $resource = $client->query($outTradeNo);
-        $state = (string) ($resource['trade_state'] ?? '');
-        if ($state !== 'SUCCESS' || (string) ($resource['out_trade_no'] ?? '') !== $outTradeNo) {
-            throw new BusinessException(in_array($state, ['USERPAYING', 'NOTPAY', 'ACCEPT'], true) ? '支付结果确认中' : '支付未完成');
+        $this->applyQuery($payment, $client, true);
+    }
+
+    public function syncPending(User $user, WechatPayClient $client): array
+    {
+        foreach ($this->openFor($user) as $payment) {
+            $this->applyQuery($payment, $client, false);
         }
 
-        $this->handle([
-            'event_type' => 'TRANSACTION.SUCCESS',
-            'resource' => $resource,
-        ]);
+        return ['pending' => $this->openFor($user)->count()];
+    }
+
+    public function syncOpen(WechatPayClient $client): int
+    {
+        $synced = 0;
+        $payments = WechatPayment::query()
+            ->whereNull('paid_at')
+            ->where('created_at', '>=', now()->subHours(2))
+            ->orderBy('id')
+            ->limit(30)
+            ->get();
+        foreach ($payments as $payment) {
+            if ($this->applyQuery($payment, $client, false)) {
+                $synced++;
+            }
+        }
+
+        return $synced;
     }
 
     private function paid(array $resource): void
@@ -106,6 +124,50 @@ class WechatPayService
         if ($order) {
             $this->posts->finishEscrowPayment($order);
         }
+    }
+
+    private function applyQuery(WechatPayment $payment, WechatPayClient $client, bool $strict): bool
+    {
+        try {
+            $resource = $client->query($payment->out_trade_no);
+        } catch (BusinessException $e) {
+            if ($strict) {
+                throw $e;
+            }
+            report($e);
+
+            return false;
+        }
+
+        $state = (string) ($resource['trade_state'] ?? '');
+        if ($state !== 'SUCCESS' || (string) ($resource['out_trade_no'] ?? '') !== $payment->out_trade_no) {
+            if ($strict) {
+                throw new BusinessException(in_array($state, ['USERPAYING', 'NOTPAY', 'ACCEPT'], true) ? '支付结果确认中' : '支付未完成');
+            }
+
+            return false;
+        }
+
+        $this->handle([
+            'event_type' => 'TRANSACTION.SUCCESS',
+            'resource' => $resource,
+        ]);
+
+        return true;
+    }
+
+    private function openFor(User $user)
+    {
+        return WechatPayment::query()
+            ->whereNull('paid_at')
+            ->where('created_at', '>=', now()->subHours(2))
+            ->where(function ($query) use ($user) {
+                $query->whereHas('escrowOrder', fn ($order) => $order->where('user_id', $user->id))
+                    ->orWhereHas('supportOrder', fn ($order) => $order->where('user_id', $user->id));
+            })
+            ->orderByDesc('id')
+            ->limit(10)
+            ->get();
     }
 
     private function ownedBy(WechatPayment $payment, User $user): bool
