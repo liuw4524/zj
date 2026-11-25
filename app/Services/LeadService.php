@@ -9,6 +9,7 @@ use App\Enums\LeadStatus;
 use App\Enums\PostStatus;
 use App\Exceptions\BusinessException;
 use App\Models\Appeal;
+use App\Models\ContentCheck;
 use App\Models\EscrowOrder;
 use App\Models\Lead;
 use App\Models\Notification;
@@ -29,6 +30,7 @@ class LeadService
         private UploadService $uploads,
         private PostService $posts,
         private GrowthService $growth,
+        private WechatContentSecurity $security,
     ) {}
 
     public function create(User $user, Post $post, array $data): Lead
@@ -46,9 +48,13 @@ class LeadService
             $this->uploads->assertOwned($user, $path);
         }
 
+        $this->security->inspectText($user, [
+            $data['content'],
+            $data['contact_name'],
+        ]);
         $this->growthAwarded = 0;
 
-        return DB::transaction(function () use ($user, $post, $data) {
+        $lead = DB::transaction(function () use ($user, $post, $data) {
             $user->phone = $data['phone'];
             $user->save();
 
@@ -69,15 +75,68 @@ class LeadService
                 ]);
             }
 
-            $this->growthAwarded = $this->growth->awardLead($user, $lead->id);
-
             return $lead->load('images');
         });
+
+        try {
+            $this->security->submitImages($user, ContentCheck::LEAD, $lead->id, $data['images'] ?? []);
+        } catch (BusinessException $e) {
+            $lead->images()->delete();
+            $lead->delete();
+            throw $e;
+        }
+
+        if (! ContentCheck::withholds(ContentCheck::LEAD, $lead->id)) {
+            $this->growthAwarded = $this->growth->awardLead($user, $lead->id);
+        }
+
+        return $lead->refresh()->load('images');
+    }
+
+    public function releaseAfterSecurity(int $leadId): void
+    {
+        $lead = Lead::query()->find($leadId);
+        if (! $lead) {
+            return;
+        }
+        if (ContentCheck::hasRisky(ContentCheck::LEAD, $leadId)) {
+            Notification::query()->firstOrCreate(
+                ['dedupe_key' => 'security:lead:'.$leadId],
+                [
+                    'user_id' => $lead->user_id,
+                    'post_id' => $lead->post_id,
+                    'kind' => 'security',
+                    'title' => '线索未通过安全检测',
+                    'body' => '请修改文字或图片后重新提交。',
+                ],
+            );
+
+            return;
+        }
+        if (ContentCheck::withholds(ContentCheck::LEAD, $leadId)) {
+            return;
+        }
+
+        $awarded = $this->growth->awardLead($lead->user, $lead->id);
+        if ($awarded > 0) {
+            Notification::query()->firstOrCreate(
+                ['dedupe_key' => 'growth:lead:'.$lead->id],
+                [
+                    'user_id' => $lead->user_id,
+                    'post_id' => $lead->post_id,
+                    'kind' => 'growth',
+                    'title' => '公益成长值 +'.$awarded,
+                    'body' => '你的线索已通过安全检测',
+                    'dedupe_key' => 'growth:lead:'.$lead->id,
+                ],
+            );
+        }
     }
 
     public function unreadCount(User $user): int
     {
         return Lead::query()
+            ->clearedForOwner()
             ->whereNull('owner_seen_at')
             ->whereHas('post', fn ($query) => $query->where('user_id', $user->id))
             ->count();
@@ -86,6 +145,7 @@ class LeadService
     public function incoming(User $user): LengthAwarePaginator
     {
         $unseenIds = Lead::query()
+            ->clearedForOwner()
             ->whereNull('owner_seen_at')
             ->whereIn('post_id', Post::query()->where('user_id', $user->id)->select('id'))
             ->pluck('id');
@@ -94,6 +154,7 @@ class LeadService
         }
 
         return Lead::query()
+            ->clearedForOwner()
             ->with(['images', 'post.escrow', 'post.images'])
             ->whereIn('post_id', Post::query()->where('user_id', $user->id)->select('id'))
             ->orderByDesc('id')
@@ -106,7 +167,7 @@ class LeadService
             throw new BusinessException('无权查看线索', 403);
         }
 
-        return $post->leads()->with(['images', 'post.escrow'])->orderByDesc('id')->paginate(20);
+        return $post->leads()->clearedForOwner()->with(['images', 'post.escrow'])->orderByDesc('id')->paginate(20);
     }
 
     public function show(User $user, Lead $lead): Lead
@@ -117,6 +178,7 @@ class LeadService
         if (! $allowed) {
             throw new BusinessException('无权查看线索', 403);
         }
+        $this->assertVisibleToOwner($user, $lead);
 
         return $lead;
     }
@@ -133,6 +195,7 @@ class LeadService
     public function match(User $user, Lead $lead): Lead
     {
         $user->assertNotBlocked();
+        $this->assertVisibleToOwner($user, $lead);
         $post = $lead->post;
         $this->assertOwner($user, $post);
 
@@ -189,6 +252,7 @@ class LeadService
     public function reject(User $user, Lead $lead): Lead
     {
         $user->assertNotBlocked();
+        $this->assertVisibleToOwner($user, $lead);
         $post = $lead->post;
         $this->assertOwner($user, $post);
         $this->assertLeadMutable($post);
@@ -212,6 +276,7 @@ class LeadService
     public function acknowledge(User $user, Lead $lead): Lead
     {
         $user->assertNotBlocked();
+        $this->assertVisibleToOwner($user, $lead);
         $post = $lead->post;
         $this->assertOwner($user, $post);
         $this->assertLeadMutable($post);
@@ -271,7 +336,6 @@ class LeadService
     public function confirm(User $user, Lead $lead): Post
     {
         $this->assertCanConfirm($user, $lead);
-        $post = $lead->post;
         $paths = $lead->receiptImages()->orderBy('sort')->pluck('path')->all();
         if (count($paths) < 1) {
             throw new BusinessException('请上传接收照片');
@@ -281,9 +345,28 @@ class LeadService
             $this->uploads->assertOwned($user, $path);
         }
 
-        return DB::transaction(function () use ($lead, $post) {
+        return DB::transaction(function () use ($user, $lead) {
+            $lockedLead = Lead::query()->whereKey($lead->id)->lockForUpdate()->firstOrFail();
+            $post = Post::query()->whereKey($lockedLead->post_id)->lockForUpdate()->firstOrFail();
+            $this->assertOwner($user, $post);
+
+            if ($lockedLead->kind === LeadKind::Seen) {
+                throw new BusinessException('目击线索不能确认收到');
+            }
+
+            if ($lockedLead->status !== LeadStatus::Matched || $post->status !== PostStatus::Handover) {
+                throw new BusinessException('当前不能确认收到');
+            }
+
+            if ($lockedLead->receiptImages()->count() < 1) {
+                throw new BusinessException('请上传接收照片');
+            }
+
+            $lockedLead->confirmed_at = now();
+            $lockedLead->save();
+
             if ($post->reward_amount === 0 || ! $post->escrow_to_platform) {
-                return $this->posts->closeSettled($post->fresh());
+                return $this->posts->closeSettled($post);
             }
 
             $order = EscrowOrder::query()->where('post_id', $post->id)->lockForUpdate()->first();
@@ -291,7 +374,7 @@ class LeadService
                 throw new BusinessException('托管单不存在');
             }
 
-            $order->lead_id = $lead->id;
+            $order->lead_id = $lockedLead->id;
             $order->save();
             app(EscrowService::class)->moveToPendingOffline($order);
 
@@ -302,6 +385,7 @@ class LeadService
     public function notMine(User $user, Lead $lead): Lead
     {
         $user->assertNotBlocked();
+        $this->assertVisibleToOwner($user, $lead);
         $post = $lead->post;
         $this->assertOwner($user, $post);
         $this->assertLeadMutable($post);
@@ -451,6 +535,7 @@ class LeadService
     private function assertCanConfirm(User $user, Lead $lead): void
     {
         $user->assertNotBlocked();
+        $this->assertVisibleToOwner($user, $lead);
         $post = $lead->post;
         $this->assertOwner($user, $post);
 
@@ -468,6 +553,18 @@ class LeadService
         if ($user->id !== $post->user_id) {
             throw new BusinessException('无权操作该帖子', 403);
         }
+    }
+
+    private function assertVisibleToOwner(User $user, Lead $lead): void
+    {
+        if ($user->id === $lead->user_id || ! ContentCheck::withholds(ContentCheck::LEAD, $lead->id)) {
+            return;
+        }
+
+        throw new BusinessException(
+            ContentCheck::hasRisky(ContentCheck::LEAD, $lead->id) ? '内容未通过安全检测' : '线索还在安全检测',
+            404,
+        );
     }
 
     private function assertLeadMutable(Post $post): void

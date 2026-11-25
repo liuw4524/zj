@@ -49,6 +49,8 @@ return [
         'cert' => env('WECHAT_CERT_PATH'),
         'public_key' => env('WECHAT_PUBLIC_KEY_PATH'),
         'notify_url' => rtrim((string) env('APP_URL', ''), '/').'/api/pay/wechat/notify',
+        'msg_token' => env('WECHAT_MSG_TOKEN'),
+        'msg_aes_key' => env('WECHAT_MSG_AES_KEY'),
     ],
 
 ];

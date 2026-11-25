@@ -11,6 +11,7 @@ Artisan::command('inspire', function () {
 Schedule::command('posts:freeze-expired')->hourly();
 Schedule::command('clue-posts:delist-expired')->hourly();
 Schedule::command('clue-posts:purge-stale')->daily();
+Schedule::command('posts:purge-images')->daily();
 Schedule::command('posts:remind-expiring')->hourly();
 Schedule::command('escrows:finish-cooling')->hourly();
 Schedule::command('escrows:remind')->hourly();

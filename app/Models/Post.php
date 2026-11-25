@@ -42,6 +42,8 @@ class Post extends Model
         return [
             'lost_at' => 'datetime',
             'lit_until' => 'datetime',
+            'closed_at' => 'datetime',
+            'images_purged_at' => 'datetime',
             'status' => PostStatus::class,
             'reward_amount' => 'integer',
             'reward_topped_up' => 'boolean',

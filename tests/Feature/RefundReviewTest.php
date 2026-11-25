@@ -239,6 +239,71 @@ class RefundReviewTest extends TestCase
             ->assertJsonPath('data.0.settlement_status', '待平台线下打款');
     }
 
+    public function test_force_close_of_held_funds_tells_the_operator_to_refund(): void
+    {
+        $postId = $this->approve($this->pay($this->createPost('不能结案')));
+
+        Livewire::actingAs(DebugUsers::operator())
+            ->test(ListPosts::class)
+            ->callTableAction('forceClose', $postId)
+            ->assertNotified('托管中的单据请使用协助退款');
+
+        $this->assertSame(PostStatus::Showing, Post::query()->findOrFail($postId)->status);
+        $this->assertSame(EscrowStatus::Held, EscrowOrder::query()->where('post_id', $postId)->first()->status);
+    }
+
+    public function test_assist_refund_returns_held_funds_and_withdraws_the_post(): void
+    {
+        $postId = $this->approve($this->pay($this->createPost('协助退')));
+
+        Livewire::actingAs(DebugUsers::operator())
+            ->test(ListPosts::class)
+            ->callTableAction('assistRefund', $postId);
+
+        $this->assertSame(PostStatus::Withdrawn, Post::query()->findOrFail($postId)->status);
+        $this->assertSame(EscrowStatus::Refunded, EscrowOrder::query()->where('post_id', $postId)->first()->status);
+    }
+
+    public function test_assist_refund_failure_stays_on_the_list(): void
+    {
+        $postId = $this->approve($this->pay($this->createPost('退款失败')));
+        $this->app->bind(PaymentGateway::class, fn () => new class implements PaymentGateway
+        {
+            public function usesWechat(): bool
+            {
+                return true;
+            }
+
+            public function charge(\App\Models\EscrowOrder $order): ?array
+            {
+                return null;
+            }
+
+            public function chargeTopup(\App\Models\EscrowOrder $order, int $addAmount): ?array
+            {
+                return null;
+            }
+
+            public function chargeSupport(\App\Models\SupportOrder $order): ?array
+            {
+                return null;
+            }
+
+            public function refund(Refund $refund): void
+            {
+                throw new BusinessException('微信退款失败');
+            }
+        });
+
+        Livewire::actingAs(DebugUsers::operator())
+            ->test(ListPosts::class)
+            ->callTableAction('assistRefund', $postId)
+            ->assertNotified('微信退款失败');
+
+        $this->assertSame(PostStatus::Showing, Post::query()->findOrFail($postId)->status);
+        $this->assertSame(EscrowStatus::Held, EscrowOrder::query()->where('post_id', $postId)->first()->status);
+    }
+
     private function matchedPost(string $name): array
     {
         $postId = $this->approve($this->pay($this->createPost($name)));

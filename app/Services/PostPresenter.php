@@ -62,6 +62,7 @@ class PostPresenter
         $data['images'] = $post->images->map(fn ($image) => [
             'url' => Storage::disk('public')->url($image->path),
         ])->values()->all();
+        $data['images_purged'] = $post->images_purged_at !== null;
         $data['reject_reason'] = $viewer->id === $post->user_id ? $post->reject_reason : null;
         $data['has_escrow'] = $post->escrow()->exists();
         $data['can_pay'] = $viewer->id === $post->user_id && $post->status === PostStatus::PendingPayment;
@@ -99,6 +100,7 @@ class PostPresenter
             'images' => $lead->images->map(fn ($image) => [
                 'url' => Storage::disk('public')->url($image->path),
             ])->values()->all(),
+            'images_purged' => $post?->images_purged_at !== null,
             'post' => $post ? [
                 'id' => $post->id,
                 'pet_name' => $post->pet_name,

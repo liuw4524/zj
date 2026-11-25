@@ -11,7 +11,7 @@ class RequireApiAuth
 {
     public function handle(Request $request, Closure $next): Response
     {
-        if (config('app.auth_disabled') || $request->is('api/auth/wechat') || $request->is('api/pay/wechat/notify')) {
+        if (config('app.auth_disabled') || $request->is('api/auth/wechat') || $request->is('api/pay/wechat/notify') || $request->is('api/wechat/message')) {
             return $next($request);
         }
 

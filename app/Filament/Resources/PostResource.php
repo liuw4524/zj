@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Enums\EscrowStatus;
 use App\Enums\PostStatus;
+use App\Exceptions\BusinessException;
 use App\Models\Post;
 use App\Services\PostService;
 use App\Support\Money;
@@ -11,6 +12,7 @@ use Filament\Forms;
 use Filament\Forms\Form;
 use Filament\Infolists;
 use Filament\Infolists\Infolist;
+use Filament\Notifications\Notification;
 use Filament\Resources\Resource;
 use Filament\Tables;
 use Filament\Tables\Table;
@@ -75,8 +77,14 @@ class PostResource extends Resource
             Infolists\Components\TextEntry::make('pet_traits')->label('宠物爱好特点')->placeholder('未填')->columnSpanFull(),
             Infolists\Components\TextEntry::make('lost_story')->label('走失经过')->placeholder('未填')->columnSpanFull(),
             Infolists\Components\TextEntry::make('reject_reason')->label('驳回原因')->placeholder('无')->columnSpanFull(),
+            Infolists\Components\TextEntry::make('images_purged_at')
+                ->label('图片')
+                ->visible(fn (Post $record) => $record->images_purged_at !== null)
+                ->formatStateUsing(fn () => '已过期清理')
+                ->columnSpanFull(),
             Infolists\Components\ImageEntry::make('image_paths')
                 ->label('图片')
+                ->visible(fn (Post $record) => $record->images_purged_at === null)
                 ->disk('public')
                 ->height(160)
                 ->getStateUsing(fn (Post $record) => $record->images->pluck('path')->all())
@@ -168,13 +176,22 @@ class PostResource extends Resource
                 Tables\Actions\Action::make('forceClose')
                     ->label('强制结案')
                     ->requiresConfirmation()
-                    ->action(fn (Post $record) => app(PostService::class)->forceClose($record)),
+                    ->action(fn (Post $record) => self::run(fn () => app(PostService::class)->forceClose($record))),
                 Tables\Actions\Action::make('assistRefund')
                     ->label('协助退款')
                     ->requiresConfirmation()
-                    ->action(fn (Post $record) => app(PostService::class)->assistRefund($record)),
+                    ->action(fn (Post $record) => self::run(fn () => app(PostService::class)->assistRefund($record))),
             ])
             ->bulkActions([]);
+    }
+
+    private static function run(callable $action): void
+    {
+        try {
+            $action();
+        } catch (BusinessException $exception) {
+            Notification::make()->title($exception->getMessage())->danger()->send();
+        }
     }
 
     private static function refundLabel(Post $post): ?string

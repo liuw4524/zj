@@ -126,7 +126,7 @@ class EscrowService
         $order->save();
         $locked = $this->moveToPendingOffline($order, 'refuse');
         app(PostService::class)->closeSettled($locked->post);
-        $this->tellClue($lead, '平台将支付酬谢', '宠主的退款申请未通过。确认交接完成后，酬谢由平台付给你。');
+        $this->tellClue($lead, '平台将支付酬谢', $this->cluePayBody($locked, '宠主的退款申请未通过。确认交接完成后，酬谢由平台付给你。'));
 
         return $locked->refresh();
     }
@@ -147,7 +147,7 @@ class EscrowService
         $locked = $this->moveToPendingOffline($order, 'handover');
         app(PostService::class)->closeSettled($locked->post);
         $locked = $locked->refresh();
-        $this->tellClue($lead, '平台将支付酬谢', '平台已确认把酬谢付给你，会线下打款。');
+        $this->tellClue($lead, '平台将支付酬谢', $this->cluePayBody($locked, '平台已确认把酬谢付给你，会线下打款。'));
         $this->tellOwner($locked, '酬谢改付给线索人', '平台已确认交接，托管酬谢将付给线索人，不再退回。');
 
         return $locked;
@@ -202,6 +202,17 @@ class EscrowService
                 'body' => $body,
             ],
         );
+    }
+
+    private function cluePayBody(EscrowOrder $order, string $body): string
+    {
+        if ($order->commission_rate === null || $order->payee_amount === null) {
+            return $body;
+        }
+
+        $payee = Money::yuan($order->payee_amount);
+
+        return $body.'平台将抽取酬谢的 '.$order->commission_rate.'% 作为平台的运营和税费成本，您实际得到的酬谢是 '.$payee.'，请您知悉。';
     }
 
     private function tellClue(Lead $lead, string $title, string $body): void

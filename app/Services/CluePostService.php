@@ -7,6 +7,7 @@ use App\Enums\CluePostStatus;
 use App\Exceptions\BusinessException;
 use App\Models\ClueContactRequest;
 use App\Models\CluePost;
+use App\Models\ContentCheck;
 use App\Models\Notification;
 use App\Models\Setting;
 use App\Models\User;
@@ -21,6 +22,7 @@ class CluePostService
     public function __construct(
         private UploadService $uploads,
         private GrowthService $growth,
+        private WechatContentSecurity $security,
     ) {}
 
     public function create(User $user, array $data): CluePost
@@ -33,7 +35,13 @@ class CluePostService
             $this->uploads->assertOwned($user, $path);
         }
 
-        return DB::transaction(function () use ($user, $data) {
+        $text = $this->security->inspectText($user, [
+            $data['description'],
+            $data['contact_name'],
+        ]);
+        $machineHold = $this->security->delaysPublish($text, $data['images']);
+
+        $post = DB::transaction(function () use ($user, $data, $machineHold) {
             User::query()->whereKey($user->id)->lockForUpdate()->first();
             $active = CluePost::query()
                 ->where('user_id', $user->id)
@@ -77,12 +85,24 @@ class CluePostService
                 ]);
             }
 
-            if (! Setting::reviewRequired()) {
+            if (! Setting::reviewRequired() && ! $machineHold) {
                 return $this->approve($post)->load('images');
             }
 
             return $post->load('images');
         });
+
+        if ($text === ContentCheck::REVIEW) {
+            $this->security->rememberTextReview($user, ContentCheck::CLUE, $post->id);
+        }
+        try {
+            $this->security->submitImages($user, ContentCheck::CLUE, $post->id, $data['images']);
+        } catch (BusinessException $e) {
+            $this->rejectForSecurity($post);
+            throw $e;
+        }
+
+        return $post->refresh()->load('images');
     }
 
     public function publicList(string $province, string $city): LengthAwarePaginator
@@ -122,6 +142,7 @@ class CluePostService
 
     public function approve(CluePost $post): CluePost
     {
+        $this->security->assertReadyForAdmin(ContentCheck::CLUE, $post->id);
         if ($post->status !== CluePostStatus::PendingReview) {
             throw new BusinessException('当前状态不能通过审核');
         }
@@ -155,6 +176,30 @@ class CluePostService
         }
 
         return $this->growth->awardShare($user, 'clue_post', $post->id);
+    }
+
+    public function rejectForSecurity(CluePost $post): void
+    {
+        $post = CluePost::query()->whereKey($post->id)->first();
+        if (! $post || in_array($post->status, [CluePostStatus::Rejected, CluePostStatus::Withdrawn], true)) {
+            return;
+        }
+
+        $post->status = CluePostStatus::Rejected;
+        $post->reject_reason = '内容未通过安全检测';
+        $post->lit_until = null;
+        $post->save();
+
+        Notification::query()->firstOrCreate(
+            ['dedupe_key' => 'security:clue:'.$post->id],
+            [
+                'user_id' => $post->user_id,
+                'clue_post_id' => $post->id,
+                'kind' => 'security',
+                'title' => '内容未通过安全检测',
+                'body' => '请修改文字或图片后重新发布。',
+            ],
+        );
     }
 
     public function reject(CluePost $post, string $reason): CluePost

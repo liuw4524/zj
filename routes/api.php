@@ -8,10 +8,12 @@ use App\Http\Controllers\Api\MeController;
 use App\Http\Controllers\Api\MiscController;
 use App\Http\Controllers\Api\PostController;
 use App\Http\Controllers\Api\SupportController;
+use App\Http\Controllers\Api\WechatMessageController;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/auth/wechat', [\App\Http\Controllers\Api\AuthController::class, 'wechat'])->middleware('throttle:10,1');
 Route::post('/pay/wechat/notify', [\App\Http\Controllers\Api\WechatPayController::class, 'notify']);
+Route::match(['get', 'post'], '/wechat/message', [WechatMessageController::class, 'message']);
 Route::match(['get', 'post'], '/pay/wechat/confirm', [\App\Http\Controllers\Api\WechatPayController::class, 'confirm'])->middleware('throttle:30,1');
 Route::post('/pay/wechat/sync', [\App\Http\Controllers\Api\WechatPayController::class, 'sync'])->middleware('throttle:30,1');
 

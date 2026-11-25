@@ -3,10 +3,12 @@
 namespace App\Services;
 
 use App\Contracts\PaymentGateway;
+use App\Enums\AppealStatus;
 use App\Enums\EscrowStatus;
 use App\Enums\LeadStatus;
 use App\Enums\PostStatus;
 use App\Exceptions\BusinessException;
+use App\Models\ContentCheck;
 use App\Models\EscrowOrder;
 use App\Models\Notification;
 use App\Models\Post;
@@ -18,15 +20,20 @@ use App\Support\TraceCode;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use RuntimeException;
 
 class PostService
 {
+    public const IMAGE_PURGE_DAYS = 180;
+
     public ?array $pendingPayment = null;
 
     public function __construct(
         private UploadService $uploads,
         private PaymentGateway $gateway,
+        private WechatContentSecurity $security,
     ) {}
 
     public function pullPayment(): ?array
@@ -53,8 +60,19 @@ class PostService
             $this->uploads->assertOwned($user, $path);
         }
 
+        $text = $this->security->inspectText($user, [
+            $data['pet_name'],
+            $data['breed'] ?? '',
+            $data['description'],
+            $data['pet_traits'] ?? '',
+            $data['lost_place'],
+            $data['lost_story'] ?? '',
+            $data['contact_name'],
+        ]);
+        $machineHold = $this->security->delaysPublish($text, $data['images']);
+
         try {
-            return DB::transaction(function () use ($user, $data, $reward) {
+            $post = DB::transaction(function () use ($user, $data, $reward, $machineHold) {
                 $user->phone = $data['phone'];
                 $user->save();
 
@@ -78,7 +96,7 @@ class PostService
                 $post->contact_phone = $data['contact_phone'];
                 if ($post->escrow_to_platform) {
                     $post->status = PostStatus::PendingPayment;
-                } elseif (Setting::reviewRequired()) {
+                } elseif (Setting::reviewRequired() || $machineHold) {
                     $post->status = PostStatus::PendingReview;
                 } else {
                     $post->status = PostStatus::Showing;
@@ -107,6 +125,18 @@ class PostService
 
             throw $e;
         }
+
+        if ($text === ContentCheck::REVIEW) {
+            $this->security->rememberTextReview($user, ContentCheck::POST, $post->id);
+        }
+        try {
+            $this->security->submitImages($user, ContentCheck::POST, $post->id, $data['images']);
+        } catch (BusinessException $e) {
+            $this->rejectForSecurity($post);
+            throw $e;
+        }
+
+        return $post->refresh()->load('images');
     }
 
     public function publicList(array $filters): LengthAwarePaginator
@@ -171,6 +201,7 @@ class PostService
 
     public function approve(Post $post): Post
     {
+        $this->security->assertReadyForAdmin(ContentCheck::POST, $post->id);
         if ($post->status !== PostStatus::PendingReview) {
             throw new BusinessException('当前状态不能通过审核');
         }
@@ -181,6 +212,43 @@ class PostService
         $post->save();
 
         return $post;
+    }
+
+    public function rejectForSecurity(Post $post): void
+    {
+        $rejected = false;
+        DB::transaction(function () use ($post, &$rejected) {
+            $locked = Post::query()->whereKey($post->id)->lockForUpdate()->first();
+            if (! $locked || in_array($locked->status, [PostStatus::Rejected, PostStatus::Withdrawn, PostStatus::Closed], true)) {
+                return;
+            }
+
+            $order = EscrowOrder::query()->where('post_id', $locked->id)->lockForUpdate()->first();
+            if ($order && in_array($order->status, [EscrowStatus::Held, EscrowStatus::AppealFrozen], true)) {
+                $this->refundHeld($locked, $order, false);
+            }
+
+            $locked->reject_reason = '内容未通过安全检测';
+            $this->enterTerminal($locked, PostStatus::Rejected);
+            $locked->active_key = null;
+            $locked->lit_until = null;
+            $locked->save();
+            $this->closeOpenLeads($locked);
+            $rejected = true;
+        });
+
+        if ($rejected) {
+            Notification::query()->firstOrCreate(
+                ['dedupe_key' => 'security:post:'.$post->id],
+                [
+                    'user_id' => $post->user_id,
+                    'post_id' => $post->id,
+                    'kind' => 'security',
+                    'title' => '内容未通过安全检测',
+                    'body' => '请修改文字或图片后重新发布。',
+                ],
+            );
+        }
     }
 
     public function reject(Post $post, string $reason): Post
@@ -198,7 +266,7 @@ class PostService
             }
 
             $locked->reject_reason = $reason;
-            $locked->status = PostStatus::Rejected;
+            $this->enterTerminal($locked, PostStatus::Rejected);
             $locked->active_key = null;
             $locked->save();
 
@@ -265,7 +333,28 @@ class PostService
             $lockedOrder->paid_at = $lockedOrder->paid_at ?: now();
             $lockedOrder->save();
 
-            if (Setting::reviewRequired()) {
+            if (ContentCheck::hasRisky(ContentCheck::POST, $locked->id)) {
+                $locked->reject_reason = '内容未通过安全检测';
+                $this->enterTerminal($locked, PostStatus::Rejected);
+                $locked->active_key = null;
+                $locked->save();
+                $this->closeOpenLeads($locked);
+                $this->refundHeld($locked, $lockedOrder, false);
+                Notification::query()->firstOrCreate(
+                    ['dedupe_key' => 'security:post:'.$locked->id],
+                    [
+                        'user_id' => $locked->user_id,
+                        'post_id' => $locked->id,
+                        'kind' => 'security',
+                        'title' => '内容未通过安全检测',
+                        'body' => '请修改文字或图片后重新发布。',
+                    ],
+                );
+
+                return;
+            }
+
+            if (Setting::reviewRequired() || ContentCheck::holds(ContentCheck::POST, $locked->id)) {
                 $locked->status = PostStatus::PendingReview;
             } else {
                 $locked->status = PostStatus::Showing;
@@ -370,7 +459,7 @@ class PostService
                 throw new BusinessException('当前状态不能撤回');
             }
 
-            $locked->status = PostStatus::Withdrawn;
+            $this->enterTerminal($locked, PostStatus::Withdrawn);
             $locked->active_key = null;
             $locked->lit_until = null;
             $locked->save();
@@ -395,7 +484,7 @@ class PostService
             return;
         }
 
-        $post->status = PostStatus::Withdrawn;
+        $this->enterTerminal($post, PostStatus::Withdrawn);
         $post->active_key = null;
         $post->lit_until = null;
         $post->save();
@@ -464,7 +553,7 @@ class PostService
 
     public function closeSettled(Post $post): Post
     {
-        $post->status = PostStatus::Closed;
+        $this->enterTerminal($post, PostStatus::Closed);
         $post->active_key = null;
         $post->save();
 
@@ -522,7 +611,7 @@ class PostService
                 ->update(['status' => LeadStatus::Rejected->value]);
             $this->closeOpenLeads($locked);
 
-            $locked->status = PostStatus::Withdrawn;
+            $this->enterTerminal($locked, PostStatus::Withdrawn);
             $locked->active_key = null;
             $locked->lit_until = null;
             $locked->save();
@@ -650,6 +739,114 @@ class PostService
                 '撤单退款',
                 '「'.$post->pet_name.'」已撤回，托管 '.Money::yuan($order->amount).' 已原路退回。',
             );
+        }
+    }
+
+    public function purgeExpiredImages(): int
+    {
+        $count = 0;
+        Post::query()
+            ->whereIn('status', [PostStatus::Closed, PostStatus::Withdrawn, PostStatus::Rejected])
+            ->whereNull('images_purged_at')
+            ->whereNotNull('closed_at')
+            ->where('closed_at', '<=', now()->subDays(self::IMAGE_PURGE_DAYS))
+            ->orderBy('id')
+            ->eachById(function (Post $post) use (&$count) {
+                try {
+                    $purged = DB::transaction(fn () => $this->purgeImagesIfDue($post));
+                } catch (\Throwable $e) {
+                    report($e);
+
+                    return;
+                }
+
+                if ($purged) {
+                    $count++;
+                }
+            });
+
+        return $count;
+    }
+
+    private function enterTerminal(Post $post, PostStatus $status): void
+    {
+        $post->status = $status;
+        if ($post->closed_at === null) {
+            $post->closed_at = now();
+        }
+    }
+
+    private function purgeImagesIfDue(Post $post): bool
+    {
+        $locked = Post::query()->whereKey($post->id)->lockForUpdate()->first();
+        if (! $locked || $locked->images_purged_at !== null) {
+            return false;
+        }
+
+        if (! in_array($locked->status, [PostStatus::Closed, PostStatus::Withdrawn, PostStatus::Rejected], true)) {
+            return false;
+        }
+
+        if ($locked->closed_at === null || $locked->closed_at->greaterThan(now()->subDays(self::IMAGE_PURGE_DAYS))) {
+            return false;
+        }
+
+        $order = EscrowOrder::query()->where('post_id', $locked->id)->lockForUpdate()->first();
+        if (! $this->escrowReadyForImagePurge($order)) {
+            return false;
+        }
+
+        if ($locked->appeals()->where('status', AppealStatus::Pending)->exists()) {
+            return false;
+        }
+
+        $locked->load(['images', 'leads.images', 'leads.receiptImages']);
+        foreach ($locked->images as $image) {
+            $this->deleteStoredFile($locked, $image->path);
+        }
+        foreach ($locked->leads as $lead) {
+            foreach ($lead->images as $image) {
+                $this->deleteStoredFile($locked, $image->path);
+            }
+            foreach ($lead->receiptImages as $image) {
+                $this->deleteStoredFile($locked, $image->path);
+            }
+            $lead->images()->delete();
+            $lead->receiptImages()->delete();
+        }
+        $locked->images()->delete();
+        $locked->images_purged_at = now();
+        $locked->save();
+
+        return true;
+    }
+
+    private function escrowReadyForImagePurge(?EscrowOrder $order): bool
+    {
+        if ($order === null) {
+            return true;
+        }
+
+        return in_array($order->status, [
+            EscrowStatus::Refunded,
+            EscrowStatus::Settled,
+            EscrowStatus::Unpaid,
+        ], true);
+    }
+
+    private function deleteStoredFile(Post $post, string $path): void
+    {
+        if ($path === '' || str_contains($path, '..')) {
+            return;
+        }
+
+        $disk = Storage::disk('public');
+        if (! $disk->exists($path)) {
+            return;
+        }
+
+        if (! $disk->delete($path)) {
+            throw new RuntimeException('丢失帖 '.$post->id.' 的图片删除失败');
         }
     }
 

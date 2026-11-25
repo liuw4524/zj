@@ -293,6 +293,15 @@ class P0AcceptanceTest extends TestCase
         $this->asRole('owner')->postJson('/api/leads/'.$freshFirst.'/confirm')
             ->assertOk()->assertJsonPath('data.status', PostStatus::Closed->value)
             ->assertJsonPath('data.status_text', '已结案');
+        $this->asRole('owner')->postJson('/api/leads/'.$freshFirst.'/confirm')
+            ->assertStatus(422)->assertJsonPath('message', '当前不能确认收到');
+
+        $confirmedLead = \App\Models\Lead::query()->findOrFail($freshFirst);
+        $this->assertNotNull($confirmedLead->confirmed_at);
+        $this->assertSame('已确认收到', $confirmedLead->statusLabel());
+        $closedOther = \App\Models\Lead::query()->findOrFail($pending);
+        $this->assertNull($closedOther->confirmed_at);
+        $this->assertSame('已随结案关闭', $closedOther->statusLabel());
 
         $this->asRole('owner')->getJson('/api/my/posts')
             ->assertOk()
